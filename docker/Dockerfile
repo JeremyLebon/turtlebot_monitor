@@ -10,9 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# fix older wheel issues
+RUN pip install --upgrade pip setuptools wheel
 
+COPY requirements.txt .
+RUN pip install --no-cache-dir --no-build-isolation --prefer-binary -r requirements.txt
 COPY app.py .
 COPY turtlebots.json .
 
