@@ -1,2 +1,2 @@
 Flask==2.3.2
-python3-nmap==1.6.0
+python-nmap
