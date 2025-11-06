@@ -7,7 +7,7 @@ import nmap
 import socket
 
 # Config via env of file
-SUBNET = os.environ.get("SCAN_SUBNET", "192.168.1.0/24")
+SUBNET = os.environ.get("SCAN_SUBNET", "192.168.60.0/24")
 INTERVAL = int(os.environ.get("SCAN_INTERVAL", "10"))
 TURTLEBOTS_FILE = "turtlebots.json"
 
