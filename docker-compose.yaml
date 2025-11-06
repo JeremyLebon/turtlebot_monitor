@@ -26,8 +26,6 @@ services:
       - SCAN_INTERVAL=10
     container_name: turtlebot-monitor
     privileged: true
-    cap_add:
-      - NET_ADMIN
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     command: bash 
