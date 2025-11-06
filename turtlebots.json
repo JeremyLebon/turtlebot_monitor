@@ -1,7 +1,14 @@
 {
   "turtlebots": {
     "turtlebot01.local": "88:A2:9E:2C:D6:D6",
-    "turtlebot02.local": "DC:A6:32:AA:BB:CD",
-    "turtlebot03.local": "2C:CF:67:75:70:6F"
+    "turtlebot02.local": "88:A2:9E:2C:D5:70",
+    "turtlebot03.local": "2C:CF:67:75:70:6F",
+    "turtlebot04.local": "88:A2:9E:2C:ED:33",
+    "turtlebot05.local": "88:A2:9E:2C:D3:8A",
+    "turtlebot06.local": "88:A2:9E:2C:D8:25",
+    "turtlebot07.local": "88:A2:9E:2C:D5:07",
+    "turtlebot08.local": "88:A2:9E:2C:D6:67",
+    "turtlebot09.local": "88-A2-9E-2C-E5-AE"
+
   }
 }
