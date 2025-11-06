@@ -7,7 +7,7 @@ import threading
 app = Flask(__name__)
 scanner = nmap.PortScanner()
 
-SCAN_SUBNET = "192.168.1.0/24"
+SCAN_SUBNET = "192.168.60.0/24"
 SCAN_INTERVAL = 10  # seconden
 
 # Data laden
