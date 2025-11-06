@@ -1,0 +1,7 @@
+{
+  "turtlebots": {
+    "turtlebot01.local": "DC:A6:32:AA:BB:CC",
+    "turtlebot02.local": "DC:A6:32:AA:BB:CD",
+    "turtlebot03.local": "DC:A6:32:AA:BB:CE"
+  }
+}
