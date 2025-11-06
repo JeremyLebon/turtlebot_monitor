@@ -29,4 +29,6 @@ services:
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     command: bash 
+    ports:
+      - "5000:5000"
 
