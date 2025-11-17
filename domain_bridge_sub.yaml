@@ -1,0 +1,107 @@
+name: sub_turtle_info
+
+to_domain: 0
+topics:
+#=============================================
+  # TurtleBot 1
+  battery_state:
+    type: sensor_msgs/msg/BatteryState
+    to_domain: 0
+    from_domain: 1
+    remap: battery_state_1
+  nav2_status:
+    type: std_msgs/msg/String
+    to_domain: 0
+    from_domain: 1
+#=============================================
+  # TurtleBot 2
+  battery_state:
+    type: sensor_msgs/msg/BatteryState
+    to_domain: 0
+    from_domain: 2
+    remap: battery_state_2
+  nav2_status:
+    type: std_msgs/msg/String
+    to_domain: 0
+    from_domain: 2
+#=============================================
+  # TurtleBot 3
+  battery_state:
+    type: sensor_msgs/msg/BatteryState
+    to_domain: 0
+    from_domain: 3
+    remap: battery_state_3
+  nav2_status:
+    type: std_msgs/msg/String
+    to_domain: 0
+    from_domain: 3
+#=============================================
+  # TurtleBot 4
+  battery_state:
+    type: sensor_msgs/msg/BatteryState
+    to_domain: 0
+    from_domain: 4
+    remap: battery_state_4
+  nav2_status:
+    type: std_msgs/msg/String
+    to_domain: 0
+    from_domain: 4
+#=============================================
+  # TurtleBot 5
+  battery_state:
+    type: sensor_msgs/msg/BatteryState
+    to_domain: 0
+    from_domain: 5
+    remap: battery_state_5
+  nav2_status:
+    type: std_msgs/msg/String
+    to_domain: 0
+    from_domain: 5
+#=============================================
+  # TurtleBot 6
+  battery_state:
+    type: sensor_msgs/msg/BatteryState
+    to_domain: 0
+    from_domain: 6
+    remap: battery_state_6
+  nav2_status:
+    type: std_msgs/msg/String
+    to_domain: 0
+    from_domain: 6
+#=============================================
+  # TurtleBot 7
+  battery_state:
+    type: sensor_msgs/msg/BatteryState
+    to_domain: 0
+    from_domain: 7
+    remap: battery_state_7
+  nav2_status:
+    type: std_msgs/msg/String
+    to_domain: 0
+    from_domain: 7
+#=============================================
+  # TurtleBot 8
+  battery_state:
+    type: sensor_msgs/msg/BatteryState
+    to_domain: 0
+    from_domain: 8
+    remap: battery_state_8
+  nav2_status:
+    type: std_msgs/msg/String
+    to_domain: 0
+    from_domain: 8
+#=============================================
+  # TurtleBot 9
+  battery_state:
+    type: sensor_msgs/msg/BatteryState
+    to_domain: 0
+    from_domain: 9
+    remap: battery_state_9
+  nav2_status:
+    type: std_msgs/msg/String
+    to_domain: 0
+    from_domain: 9
+#=============================================
+
+    
+  

@@ -1,0 +1,59 @@
+name: pub_turtle_info
+
+from_domain: 0
+topics:
+#=============================================
+  # TurtleBot 1
+  cmd_vel:
+    type: geometry_msgs/msg/Twist
+    from_domain: 0
+    to_domain: 1
+#=============================================
+  # TurtleBot 2
+  cmd_vel:
+    type: geometry_msgs/msg/Twist
+    from_domain: 0
+    to_domain: 2
+#=============================================
+  # TurtleBot 3
+  cmd_vel:
+    type: geometry_msgs/msg/Twist
+    from_domain: 0
+    to_domain: 3
+#=============================================
+  # TurtleBot 4
+  cmd_vel:
+    type: geometry_msgs/msg/Twist
+    from_domain: 0
+    to_domain: 4
+#=============================================
+  # TurtleBot 5
+  cmd_vel:
+    type: geometry_msgs/msg/Twist
+    from_domain: 0
+    to_domain: 5
+#=============================================
+  # TurtleBot 6
+  cmd_vel:
+    type: geometry_msgs/msg/Twist
+    from_domain: 0
+    to_domain: 6
+#=============================================
+  # TurtleBot 7
+  cmd_vel:
+    type: geometry_msgs/msg/Twist
+    from_domain: 0
+    to_domain: 7
+#=============================================
+  # TurtleBot 8
+  cmd_vel:
+    type: geometry_msgs/msg/Twist
+    from_domain: 0
+    to_domain: 8
+#=============================================
+  # TurtleBot 9
+  cmd_vel:
+    type: geometry_msgs/msg/Twist
+    from_domain: 0
+    to_domain: 9
+#=============================================
