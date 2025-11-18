@@ -145,11 +145,11 @@ def scan_network():
 
 @app.route("/")
 def index():
-    return render_template("index.html", data=status_data["turtlebots"])
+    return render_template("index_V1.html", data=status_data["turtlebots"])
 
 @app.route("/others")
 def others():
-    return render_template("others.html", data=status_data["others"])
+    return render_template("others_V1.html", data=status_data["others"])
 
 @app.route("/api/status")
 def api_status():

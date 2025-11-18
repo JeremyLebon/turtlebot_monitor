@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>TurtleBot Status</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f5f5f5; margin: 20px; }
+        h1 { color: #333; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 12px; border: 1px solid #ddd; text-align: left; }
+        th { background: #333; color: white; }
+        .online { color: green; font-weight: bold; }
+        .offline { color: red; font-weight: bold; }
+        .battery { font-weight: bold; }
+        .container { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 3px 10px rgba(0,0,0,0.1); }
+    </style>
+
+    <meta http-equiv="refresh" content="5" />  <!-- Auto-refresh elke 5s -->
+</head>
+
+<body>
+<div class="container">
+    <h1>TurtleBot Status</h1>
+    <a href="/others">Bekijk onbekende apparaten →</a>
+
+    <table>
+        <tr>
+            <th>Naam</th>
+            <th>MAC</th>
+            <th>IP</th>
+            <th>Status</th>
+            <th>Batterij</th>
+        </tr>
+
+        {% for name, bot in data.items() %}
+        <tr>
+            <td>{{ name }}</td>
+            <td>{{ bot.mac }}</td>
+            <td>{{ bot.ip if bot.ip else "—" }}</td>
+
+            {% if bot.status == "online" %}
+            <td class="online">Online</td>
+            {% else %}
+            <td class="offline">Offline</td>
+            {% endif %}
+
+            <td class="battery">
+                {% if bot.battery %}
+                    {{ (bot.battery.percentage * 100) | round(1) }}%
+                    ({{ bot.battery.voltage }} V)
+                {% else %}
+                    —
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+</div>
+</body>
+</html>
