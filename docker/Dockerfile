@@ -60,4 +60,4 @@ COPY turtlebots.json .
 COPY templates ./templates
 
 EXPOSE 5000
-CMD ["python", "app_V1.py"]
+CMD ["python3", "app_V1.py"]
