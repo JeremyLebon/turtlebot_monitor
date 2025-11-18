@@ -42,16 +42,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libnss-mdns \
     iproute2 \
     net-tools \
-    python-pip \
+   python3 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# fix older wheel issues
-RUN pip install --upgrade pip setuptools wheel
+# Fix older wheel issues — USE pip3 instead of pip
+RUN pip3 install --upgrade pip setuptools wheel
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir --no-build-isolation --prefer-binary -r requirements.txt
+RUN pip3 install --no-cache-dir --no-build-isolation --prefer-binary -r requirements.txt
 COPY app.py .
 COPY app_V1.py .
 COPY turtlebots.json .
