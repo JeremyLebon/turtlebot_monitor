@@ -44,6 +44,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     net-tools \
    python3 \
     python3-pip \
+    ros-humble-domain-bridge \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

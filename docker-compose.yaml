@@ -28,7 +28,14 @@ services:
     privileged: true
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-    command: bash #python app.py
+    command: >
+      bash -c "
+      # Start ROS2 launch file in background
+      ros2 launch my_package my_launch.py &
+
+      # Start Flask app in foreground
+      python3 app_V1.py
+      "
     ports:
       - "5000:5000"
 
