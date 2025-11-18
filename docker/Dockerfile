@@ -20,7 +20,7 @@ ros-humble-rmw-cyclonedds-cpp
 
 
 
-COPY turtlebot3 /root/turtlebot3_ws/src/turtlebot3
+#COPY turtlebot3 /root/turtlebot3_ws/src/turtlebot3
 
 WORKDIR /root/turtlebot3_ws/src/turtlebot3
 
