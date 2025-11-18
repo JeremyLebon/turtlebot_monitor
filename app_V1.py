@@ -35,10 +35,10 @@ class MultiBatteryMonitor(Node):
     def __init__(self, turtlebot_names):
         super().__init__("battery_monitor_multi")
         self.subscribers = []
-
+        number_turtlebot = 0
         for name in turtlebot_names:
-            topic = f"/battery_state_{name}"
-
+            topic = f"/battery_state_{number_turtlebot}"
+            number_turtlebot +=1
             self.get_logger().info(f"Subscribing to: {topic}")
 
             sub = self.create_subscription(
