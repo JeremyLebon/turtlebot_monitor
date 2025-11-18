@@ -28,7 +28,7 @@ services:
     privileged: true
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-    command: python app.py
+    command: bash #python app.py
     ports:
       - "5000:5000"
 
