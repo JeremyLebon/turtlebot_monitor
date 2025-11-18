@@ -52,7 +52,8 @@ WORKDIR /app
 RUN pip3 install --upgrade pip setuptools wheel
 
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir --no-build-isolation --prefer-binary -r requirements.txt
+RUN pip3 install  -r requirements.txt
+# --no-cache-dir --no-build-isolation --prefer-binary -r requirements.txt
 COPY app.py .
 COPY app_V1.py .
 COPY turtlebots.json .
