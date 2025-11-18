@@ -57,6 +57,8 @@ RUN pip3 install  -r requirements.txt
 # --no-cache-dir --no-build-isolation --prefer-binary -r requirements.txt
 COPY app.py .
 COPY app_V1.py .
+COPY domain_bridge_pub.yaml .
+COPY domain_bridge_sub.yaml .
 COPY turtlebots.json .
 COPY templates ./templates
 
