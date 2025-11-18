@@ -42,6 +42,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libnss-mdns \
     iproute2 \
     net-tools \
+    python-pip \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
