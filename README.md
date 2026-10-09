@@ -65,6 +65,22 @@ netsh interface portproxy add v4tov4 listenport=8090 listenaddress=0.0.0.0 conne
 plus de firewallregel uit A (`firewall_regel.ps1`). Starten in WSL:
 `./start_monitor.sh`.
 
+## Knoppen
+
+- **Alle robots:** STOP ALLES (zonder bevestiging - noodstop voor de klas),
+  bringup starten, bijwerken, uitschakelen (met bevestiging).
+- **Per robot:** Stop, Piep (robot terugvinden), en via "meer...":
+  bringup/SLAM/Navigatie/joystick/camera starten of stoppen, bijwerken,
+  herstarten, uitschakelen.
+- De robot vraagt zelf om opdrachten (long-poll op `/poll`), dus ook dit werkt
+  door de NAT; een opdracht komt binnen ~1 s aan. Het resultaat staat onder
+  de knoppen van de robot.
+- De knoppen werken **enkel vanaf de laptop zelf** (`localhost`), zodat een
+  student die de monitor vanaf een robot-AP opent niets kan bedienen. Bewust
+  openzetten: `python monitor.py --remote-control`.
+- Rijden kan niet via de monitor (vertraging, geen zicht op de robot) - daarvoor
+  de statuspagina op de wifi van de robot of de joystick.
+
 ## Testen
 
 - http://localhost:8090 toont alle robots uit `turtlebot_config.csv`, grijs

@@ -8,6 +8,12 @@ Windows, in WSL en op Linux.
 
     python monitor.py              # http://localhost:8090
     python monitor.py --port 9000
+    python monitor.py --remote-control   # knoppen ook vanaf andere toestellen
+
+Knoppen (stop, piep, bringup, bijwerken, uitschakelen, ...): de robot vraagt
+zelf om opdrachten (long-poll op /poll) - ook dat werkt door de NAT. De knoppen
+werken standaard enkel vanaf deze laptop (localhost): een student die vanaf
+een robot-AP de monitor opent, kan niets bedienen.
 
 De robots moeten deze laptop kunnen bereiken: zet het adres in
 turtlebot_setup/monitor.conf (MONITOR_URL=http://<ip-van-de-laptop>:8090/push)
@@ -27,6 +33,23 @@ CONFIG_CSV = os.path.join(HERE, "..", "turtlebot_config.csv")
 
 robots = {}          # hostname -> {"data": payload, "seen": time, "addr": ip}
 lock = threading.Lock()
+pending = {}         # hostname -> [command, ...] waiting for the robot's poll
+polling = {}         # hostname -> time of the last poll (robot listens)
+results = {}         # hostname -> last result {"cmd", "ok", "message", "t"}
+cond = threading.Condition()
+cmd_seq = [0]
+REMOTE_CONTROL = False
+ROBOT_COMMANDS = {"stop_all", "beep", "update", "reboot", "shutdown"} | {
+    a + ":" + n for a in ("start", "stop") for n in ("bringup", "slam", "navigation", "camera", "joystick")}
+
+
+def queue_command(names, cmd):
+    with cond:
+        for name in names:
+            cmd_seq[0] += 1
+            pending.setdefault(name, []).append({"id": cmd_seq[0], "cmd": cmd, "t": time.time()})
+            results[name] = {"cmd": cmd, "ok": None, "message": "verstuurd...", "t": time.time()}
+        cond.notify_all()
 
 
 def expected_robots():
@@ -51,7 +74,34 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _read_json(self):
+        n = int(self.headers.get("Content-Length", 0))
+        return json.loads(self.rfile.read(min(n, 100000)))
+
     def do_POST(self):
+        if self.path == "/result":     # robot: result of a command
+            try:
+                r = self._read_json()
+                name = str(r["robot"])[:40]
+            except (ValueError, KeyError, TypeError):
+                return self._send(400, "bad request", "text/plain")
+            with cond:
+                results[name] = {"cmd": r.get("cmd"), "ok": r.get("ok"),
+                                 "message": str(r.get("message", ""))[:300], "t": time.time()}
+            return self._send(200, "ok", "text/plain")
+        if self.path == "/api/cmd":    # button on the page
+            if not REMOTE_CONTROL and self.client_address[0] not in ("127.0.0.1", "::1"):
+                return self._send(403, json.dumps({"error": "knoppen enkel vanaf de laptop zelf (localhost)"}),
+                                  "application/json")
+            try:
+                r = self._read_json()
+                cmd, names = r["cmd"], r["robots"]
+            except (ValueError, KeyError, TypeError):
+                return self._send(400, "bad request", "text/plain")
+            if cmd not in ROBOT_COMMANDS or not isinstance(names, list):
+                return self._send(400, "onbekende opdracht", "text/plain")
+            queue_command([str(n)[:40] for n in names], cmd)
+            return self._send(200, json.dumps({"queued": len(names)}), "application/json")
         if self.path != "/push":
             return self._send(404, "not found", "text/plain")
         try:
@@ -65,6 +115,19 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, "ok", "text/plain")
 
     def do_GET(self):
+        if self.path.startswith("/poll?"):     # robot waits for commands (long-poll)
+            from urllib.parse import parse_qs, urlparse
+            name = parse_qs(urlparse(self.path).query).get("robot", [""])[0][:40]
+            deadline = time.time() + 20
+            with cond:
+                polling[name] = time.time()
+                while not pending.get(name) and time.time() < deadline:
+                    cond.wait(deadline - time.time())
+                cmds = pending.pop(name, [])
+                polling[name] = time.time()
+            # commands older than 60 s (robot was away) are dropped
+            cmds = [c for c in cmds if time.time() - c["t"] < 60]
+            return self._send(200, json.dumps({"cmds": cmds}), "application/json")
         if self.path == "/api/robots":
             with lock:
                 seen = dict(robots)
@@ -76,7 +139,13 @@ class Handler(BaseHTTPRequestHandler):
             for name, r in seen.items():
                 if name not in names:
                     out.append(dict({"robot": name, "nr": r["data"].get("nr")}, **r))
-            return self._send(200, json.dumps({"now": time.time(), "robots": out}), "application/json")
+            with cond:
+                for r in out:
+                    r["result"] = results.get(r["robot"])
+                    r["listening"] = time.time() - polling.get(r["robot"], 0) < 30
+            return self._send(200, json.dumps({"now": time.time(), "robots": out,
+                                               "control": REMOTE_CONTROL or self.client_address[0] in ("127.0.0.1", "::1")}),
+                              "application/json")
         if self.path in ("/", "/index.html"):
             return self._send(200, PAGE, "text/html; charset=utf-8")
         self._send(404, "not found", "text/plain")
@@ -108,8 +177,25 @@ h1 { font-size:1.2rem; margin:0; }
 .warnmsg { margin-top:8px; padding:4px 8px; border-radius:6px; background:var(--yellow); color:#2a2000; font-size:.8rem; }
 .g { color:var(--green); } .y { color:var(--yellow); } .r { color:var(--red); }
 a { color:var(--accent); }
+.bar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; background:var(--card); border:1px solid var(--border);
+       border-radius:12px; padding:8px 12px; margin-bottom:14px; }
+button, select { background:#262a31; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:4px 10px;
+                 font:inherit; font-size:.82rem; cursor:pointer; }
+button:hover { border-color:var(--accent); }
+button.stop { background:var(--red); border-color:var(--red); color:#2a0d0d; font-weight:700; }
+button:disabled, select:disabled { opacity:.4; cursor:default; }
+.btns { display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; }
+.res { margin-top:6px; font-size:.78rem; color:var(--muted); }
 </style></head><body>
 <header><h1>TurtleBot Monitor</h1><span class="sub" id="summary">laden...</span></header>
+<div class="bar" id="allBar">
+  <b>Alle robots:</b>
+  <button class="stop" data-all="stop_all" title="Alle launches stoppen - motoren stil">STOP ALLES</button>
+  <button data-all="start:bringup">Bringup starten</button>
+  <button data-all="update" title="Software bijwerken (git + Docker-image)">Bijwerken</button>
+  <button data-all="shutdown" title="Alle robots uitschakelen (einde les)">Uitschakelen</button>
+  <span class="sub" id="ctrlInfo"></span>
+</div>
 <div class="grid" id="grid"></div>
 <p class="sub">Elke robot stuurt elke 5 s zijn status. Groen = alles in orde, geel = aandacht, rood = probleem, grijs = niets ontvangen.
 Statuspagina per robot: enkel bereikbaar als je laptop op de wifi van die robot zit (TB-AP-&lt;nr&gt;).</p>
@@ -120,6 +206,54 @@ function batt(v) {   // 0 % = 11.0 V: there the OpenCR switches the motors off
   if (v == null) return ["--", ""];
   var p = Math.max(0, Math.min(100, (v - 11.0) / 1.3 * 100));
   return [v.toFixed(1) + " V (" + Math.round(p) + " %)", v < 11.2 ? "r" : v < 11.4 ? "y" : "g"];
+}
+var CMD_TEXT = { stop_all: "stop alles", beep: "piep", update: "bijwerken", reboot: "herstarten", shutdown: "uitschakelen" };
+function cmdText(c) {
+  if (CMD_TEXT[c]) return CMD_TEXT[c];
+  var p = c.split(":"); return (p[0] === "start" ? "start " : "stop ") + p[1];
+}
+var CONFIRM = { reboot: 1, shutdown: 1, update: 1 };
+var control = false;
+function send(cmd, names) {
+  var many = names.length > 1;
+  if ((CONFIRM[cmd] || many) && !confirm(cmdText(cmd) + " voor " + (many ? names.length + " robots" : names[0]) + "?")) return;
+  fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ cmd: cmd, robots: names }) })
+    .then(function (x) { if (!x.ok) return x.json().then(function (j) { alert(j.error || "geweigerd"); }); refresh(); });
+}
+var lastRobots = [];
+document.querySelectorAll("[data-all]").forEach(function (b) {
+  b.addEventListener("click", function () {
+    var names = lastRobots.filter(function (r) { return r.listening; }).map(function (r) { return r.robot; });
+    if (!names.length) { alert("Geen enkele robot luistert naar de monitor."); return; }
+    var cmd = b.dataset.all;
+    if (cmd === "stop_all") {   // emergency: no confirm
+      fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ cmd: cmd, robots: names }) }).then(refresh);
+    } else send(cmd, names);
+  });
+});
+document.addEventListener("click", function (e) {
+  var b = e.target.closest("[data-cmd]");
+  if (b) send(b.dataset.cmd, [b.dataset.robot]);
+});
+document.addEventListener("change", function (e) {
+  if (e.target.matches("select[data-robot]") && e.target.value) {
+    send(e.target.value, [e.target.dataset.robot]);
+    e.target.value = "";
+  }
+});
+function controls(r) {
+  var dis = control && r.listening ? "" : " disabled";
+  var l = (r.data || {}).launch || {};
+  var opts = ["bringup", "slam", "navigation", "joystick", "camera"].map(function (k) {
+    return '<option value="' + (l[k] ? "stop:" : "start:") + k + '">' + (l[k] ? "stop " : "start ") + k + "</option>";
+  }).join("") + '<option value="update">bijwerken</option><option value="reboot">herstarten</option><option value="shutdown">uitschakelen</option>';
+  var res = r.result ? '<div class="res">' + esc(cmdText(r.result.cmd)) + ": " +
+    (r.result.ok === null ? "verstuurd..." : (r.result.ok ? '<span class="g">OK</span> ' : '<span class="r">mislukt</span> ') + esc(r.result.message)) + "</div>" : "";
+  return '<div class="btns"><button class="stop" data-cmd="stop_all" data-robot="' + esc(r.robot) + '"' + dis + ">Stop</button>" +
+    '<button data-cmd="beep" data-robot="' + esc(r.robot) + '"' + dis + ' title="Laat de robot piepen, om hem terug te vinden">Piep</button>' +
+    '<select data-robot="' + esc(r.robot) + '"' + dis + '><option value="">meer...</option>' + opts + "</select></div>" + res;
 }
 function tile(r, now) {
   var d = r.data || {}, s = d.status || {}, l = d.launch || {};
@@ -158,12 +292,18 @@ function tile(r, now) {
       "<span>Uptime</span><span>" + (s.uptime_seconds ? ago(s.uptime_seconds) : "--") + "</span>" +
       "</div><div class=\"chips\">" + chips + "</div>" +
       msgs.map(function (m) { return '<div class="alert">' + esc(m) + "</div>"; }).join("") +
-      (warns.length ? '<div class="warnmsg">' + esc(warns.join(", ")) + "</div>" : "") : "") +
+      (warns.length ? '<div class="warnmsg">' + esc(warns.join(", ")) + "</div>" : "") + controls(r) : "") +
     '<div class="sub" style="margin-top:8px"><a href="http://10.0.' + Number(r.nr) + '.10:8080/" target="_blank">statuspagina</a> (wifi TB-AP-' + nr + ")</div></div>";
 }
 function refresh() {
   fetch("/api/robots").then(function (x) { return x.json(); }).then(function (j) {
     var rs = j.robots.slice().sort(function (a, b) { return Number(a.nr) - Number(b.nr); });
+    lastRobots = rs; control = j.control;
+    document.querySelectorAll("[data-all]").forEach(function (b) { b.disabled = !control; });
+    var listening = rs.filter(function (r) { return r.listening; }).length;
+    document.getElementById("ctrlInfo").textContent = !control ? "knoppen enkel op de laptop van de docent"
+      : listening + " robot(s) luisteren naar opdrachten";
+    if (document.activeElement && document.activeElement.tagName === "SELECT") return;   // don't close an open menu
     document.getElementById("grid").innerHTML = rs.map(function (r) { return tile(r, j.now); }).join("");
     var on = rs.filter(function (r) { return r.seen && j.now - r.seen < 20; }).length;
     document.getElementById("summary").textContent = on + " van " + rs.length + " robots online - " + new Date().toLocaleTimeString("nl-BE");
@@ -177,8 +317,13 @@ refresh(); setInterval(refresh, 2000);
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--port", type=int, default=8090)
+    ap.add_argument("--remote-control", action="store_true",
+                    help="knoppen ook toelaten vanaf andere toestellen dan deze laptop")
     args = ap.parse_args()
+    global REMOTE_CONTROL
+    REMOTE_CONTROL = args.remote_control
     srv = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
+    srv.daemon_threads = True   # waiting /poll requests don't block Ctrl+C
     print("TurtleBot Monitor op http://localhost:%d (robots sturen naar http://<dit-ip>:%d/push)"
           % (args.port, args.port))
     try:
