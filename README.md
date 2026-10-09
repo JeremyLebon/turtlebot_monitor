@@ -82,6 +82,16 @@ plus de firewallregel uit A (`firewall_regel.ps1`). Starten in WSL:
 - Rijden kan niet via de monitor (vertraging, geen zicht op de robot) - daarvoor
   de statuspagina op de wifi van de robot of de joystick.
 
+### D. Docker (Docker Desktop of Docker in WSL)
+
+Geen eigen image: `docker-compose.yaml` draait `monitor.py` in het standaard
+Python-image. In deze map: `docker compose up -d`, daarna
+**http://localhost:8091** (met knoppen). Poort 8090 is voor de robots en voor
+kijken zonder knoppen; 8091 wordt enkel op 127.0.0.1 gepubliceerd, zodat
+niemand anders kan bedienen. Docker Desktop zet poort 8090 open op Windows
+zelf - geen mirrored networking of port proxy nodig, wel de firewallregel
+(`firewall_regel.ps1`). De kaartenbibliotheek blijft in `monitor/maps/`.
+
 ## Testen
 
 - http://localhost:8090 toont alle robots uit `turtlebot_config.csv`, grijs

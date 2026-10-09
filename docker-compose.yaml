@@ -1,0 +1,22 @@
+# TurtleBot Monitor als container (optie D in README.md). Geen eigen image:
+# het standaard Python-image draait monitor.py uit deze map.
+#   docker compose up -d        (in deze map)  -> http://localhost:8091 (met knoppen)
+# Docker Desktop publiceert poort 8090 op Windows zelf, dus de robots bereiken
+# de monitor ook zonder WSL mirrored networking (Windows-firewall: poort 8090
+# toelaten, zie firewall_regel.ps1).
+# Twee poorten: 8090 voor de robots (en kijken, zonder knoppen) en 8091 MET
+# knoppen, enkel gepubliceerd op 127.0.0.1 - dus enkel bereikbaar vanaf deze
+# laptop: open http://localhost:8091 om te bedienen.
+services:
+  monitor:
+    image: python:3.12-slim
+    container_name: turtlebot-monitor
+    restart: unless-stopped
+    working_dir: /monitor
+    command: python monitor.py --control-port 8091
+    ports:
+      - "8090:8090"              # robots: status + opdrachten ophalen; kijken
+      - "127.0.0.1:8091:8091"    # knoppen: enkel vanaf deze laptop
+    volumes:
+      - .:/monitor                                   # monitor.py + maps/ (kaartenbibliotheek)
+      - ../turtlebot_config.csv:/turtlebot_config.csv:ro

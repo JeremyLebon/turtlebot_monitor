@@ -23,14 +23,44 @@ in de firewall (privénetwerk) wanneer daarom gevraagd wordt.
 """
 import argparse
 import csv
+import glob
 import json
 import os
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_CSV = os.path.join(HERE, "..", "turtlebot_config.csv")
+# Kaartenbibliotheek: kaartbundels (kaart + zones + routes) van de robots,
+# om op andere robots te zetten. Bestanden: monitor/maps/<naam>.tbmap.json
+MAP_LIB = os.path.join(HERE, "maps")
+MAP_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+
+
+def library():
+    out = []
+    for path in sorted(glob.glob(os.path.join(MAP_LIB, "*.tbmap.json"))):
+        try:
+            with open(path) as f:
+                b = json.load(f)
+            out.append({"name": os.path.basename(path)[:-len(".tbmap.json")], "from": b.get("from"),
+                        "created": b.get("created"), "zones": len(b.get("zones") or []),
+                        "routes": len(b.get("routes") or {}), "size_kb": round(os.path.getsize(path) / 1024)})
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def store_map(name, bundle):
+    if not MAP_NAME_RE.match(name) or bundle.get("format") != "turtlebot-map/1":
+        raise ValueError("geen geldige kaartbundel")
+    os.makedirs(MAP_LIB, exist_ok=True)
+    path = os.path.join(MAP_LIB, name + ".tbmap.json")
+    with open(path + ".tmp", "w") as f:
+        json.dump(bundle, f)
+    os.replace(path + ".tmp", path)
 
 robots = {}          # hostname -> {"data": payload, "seen": time, "addr": ip}
 lock = threading.Lock()
@@ -41,15 +71,18 @@ cond = threading.Condition()
 cmd_seq = [0]
 REMOTE_CONTROL = False
 VIEW_ONLY = False
-ROBOT_COMMANDS = {"stop_all", "beep", "update", "reboot", "shutdown"} | {
+ROBOT_COMMANDS = {"stop_all", "beep", "update", "reboot", "shutdown", "map_upload", "map_download"} | {
     a + ":" + n for a in ("start", "stop") for n in ("bringup", "slam", "navigation", "camera", "joystick")}
 
 
-def queue_command(names, cmd):
+def queue_command(names, cmd, arg=None):
     with cond:
         for name in names:
             cmd_seq[0] += 1
-            pending.setdefault(name, []).append({"id": cmd_seq[0], "cmd": cmd, "t": time.time()})
+            c = {"id": cmd_seq[0], "cmd": cmd, "t": time.time()}
+            if arg is not None:
+                c["arg"] = arg
+            pending.setdefault(name, []).append(c)
             results[name] = {"cmd": cmd, "ok": None, "message": "verstuurd...", "t": time.time()}
         cond.notify_all()
 
@@ -76,9 +109,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _may_control(self):
+        # control server (--control-port, Docker: published on 127.0.0.1 only),
+        # or a browser on this laptop itself
+        return not VIEW_ONLY and (getattr(self.server, "control", False) or REMOTE_CONTROL
+                                  or self.client_address[0] in ("127.0.0.1", "::1"))
+
     def _read_json(self):
         n = int(self.headers.get("Content-Length", 0))
-        return json.loads(self.rfile.read(min(n, 100000)))
+        return json.loads(self.rfile.read(min(n, 20 * 1024 * 1024)))   # map bundles: some 100 kB
 
     def do_POST(self):
         if self.path == "/result":     # robot: result of a command
@@ -91,10 +130,35 @@ class Handler(BaseHTTPRequestHandler):
                 results[name] = {"cmd": r.get("cmd"), "ok": r.get("ok"),
                                  "message": str(r.get("message", ""))[:300], "t": time.time()}
             return self._send(200, "ok", "text/plain")
+        if self.path.startswith("/maps/"):   # robot uploads a map bundle
+            name = self.path[len("/maps/"):]
+            try:
+                store_map(name, self._read_json())
+            except (ValueError, TypeError, OSError) as exc:
+                return self._send(400, str(exc), "text/plain")
+            return self._send(200, "ok", "text/plain")
+        if self.path in ("/api/maps/delete", "/api/maps/upload") and not self._may_control():
+            return self._send(403, json.dumps({"error": "enkel vanaf de laptop zelf"}), "application/json")
+        if self.path == "/api/maps/delete":
+            try:
+                name = self._read_json()["name"]
+                if not MAP_NAME_RE.match(name):
+                    raise ValueError
+                os.remove(os.path.join(MAP_LIB, name + ".tbmap.json"))
+            except (ValueError, KeyError, TypeError, OSError):
+                return self._send(400, "bad request", "text/plain")
+            return self._send(200, json.dumps({"ok": True}), "application/json")
+        if self.path == "/api/maps/upload":   # .tbmap.json from the laptop (nav.html export)
+            try:
+                b = self._read_json()
+                store_map(str(b.get("name", "")), b)
+            except (ValueError, TypeError, OSError) as exc:
+                return self._send(400, json.dumps({"error": str(exc) or "geen geldige kaartbundel"}), "application/json")
+            return self._send(200, json.dumps({"ok": True}), "application/json")
         if self.path == "/api/cmd":    # button on the page
             if VIEW_ONLY:
                 return self._send(403, json.dumps({"error": "monitor gestart met --view-only"}), "application/json")
-            if not REMOTE_CONTROL and self.client_address[0] not in ("127.0.0.1", "::1"):
+            if not self._may_control():
                 return self._send(403, json.dumps({"error": "knoppen enkel vanaf de laptop zelf (localhost)"}),
                                   "application/json")
             try:
@@ -104,7 +168,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, "bad request", "text/plain")
             if cmd not in ROBOT_COMMANDS or not isinstance(names, list):
                 return self._send(400, "onbekende opdracht", "text/plain")
-            queue_command([str(n)[:40] for n in names], cmd)
+            arg = r.get("arg")
+            if cmd.startswith("map_") and not MAP_NAME_RE.match(str(arg or "")):
+                return self._send(400, "ongeldige kaartnaam", "text/plain")
+            queue_command([str(n)[:40] for n in names], cmd, arg)
             return self._send(200, json.dumps({"queued": len(names)}), "application/json")
         if self.path != "/push":
             return self._send(404, "not found", "text/plain")
@@ -132,6 +199,15 @@ class Handler(BaseHTTPRequestHandler):
             # commands older than 60 s (robot was away) are dropped
             cmds = [c for c in cmds if time.time() - c["t"] < 60]
             return self._send(200, json.dumps({"cmds": cmds}), "application/json")
+        if self.path.startswith("/maps/"):    # robot downloads a map bundle
+            name = self.path[len("/maps/"):]
+            path = os.path.join(MAP_LIB, name + ".tbmap.json")
+            if not MAP_NAME_RE.match(name) or not os.path.exists(path):
+                return self._send(404, "kaart niet in de bibliotheek", "text/plain")
+            with open(path, "rb") as f:
+                return self._send(200, f.read(), "application/json")
+        if self.path == "/api/maps":
+            return self._send(200, json.dumps(library()), "application/json")
         if self.path == "/api/robots":
             with lock:
                 seen = dict(robots)
@@ -148,7 +224,7 @@ class Handler(BaseHTTPRequestHandler):
                     r["result"] = results.get(r["robot"])
                     r["listening"] = time.time() - polling.get(r["robot"], 0) < 30
             return self._send(200, json.dumps({"now": time.time(), "robots": out,
-                                               "control": not VIEW_ONLY and (REMOTE_CONTROL or self.client_address[0] in ("127.0.0.1", "::1")),
+                                               "control": self._may_control(),
                                                "view_only": VIEW_ONLY}),
                               "application/json")
         if self.path in ("/", "/index.html"):
@@ -202,6 +278,14 @@ button:disabled, select:disabled { opacity:.4; cursor:default; }
   <span class="sub" id="ctrlInfo"></span>
 </div>
 <div class="grid" id="grid"></div>
+<div class="bar" style="margin-top:14px;display:block" id="libBox">
+  <b>Kaartenbibliotheek</b> <span class="sub">- kaart + zones + routes. Een robot stuurt een kaart hierheen via
+  "meer... &gt; kaart X naar bibliotheek"; daarna kan ze naar andere robots. Bestaat de kaart daar al, dan wordt de oude
+  eerst hernoemd naar &lt;naam&gt;_vorige.</span>
+  <table style="width:100%;margin-top:8px;font-size:.85rem;border-collapse:collapse" id="libTable"></table>
+  <div style="margin-top:8px"><label class="sub">Kaartbundel van je laptop toevoegen (.tbmap.json, export van nav.html):
+    <input type="file" id="libFile" accept=".json"></label></div>
+</div>
 <p class="sub">Elke robot stuurt elke 5 s zijn status. Groen = alles in orde, geel = aandacht, rood = probleem, grijs = niets ontvangen.
 Statuspagina per robot: enkel bereikbaar als je laptop op de wifi van die robot zit (TB-AP-&lt;nr&gt;).</p>
 <script>
@@ -212,18 +296,19 @@ function batt(v) {   // 0 % = 11.0 V: there the OpenCR switches the motors off
   var p = Math.max(0, Math.min(100, (v - 11.0) / 1.3 * 100));
   return [v.toFixed(1) + " V (" + Math.round(p) + " %)", v < 11.2 ? "r" : v < 11.4 ? "y" : "g"];
 }
-var CMD_TEXT = { stop_all: "stop alles", beep: "piep", update: "bijwerken", reboot: "herstarten", shutdown: "uitschakelen" };
+var CMD_TEXT = { stop_all: "stop alles", beep: "piep", update: "bijwerken", reboot: "herstarten", shutdown: "uitschakelen",
+                 map_upload: "kaart naar bibliotheek", map_download: "kaart uit bibliotheek" };
 function cmdText(c) {
   if (CMD_TEXT[c]) return CMD_TEXT[c];
   var p = c.split(":"); return (p[0] === "start" ? "start " : "stop ") + p[1];
 }
 var CONFIRM = { reboot: 1, shutdown: 1, update: 1 };
 var control = false;
-function send(cmd, names) {
+function send(cmd, names, arg) {
   var many = names.length > 1;
-  if ((CONFIRM[cmd] || many) && !confirm(cmdText(cmd) + " voor " + (many ? names.length + " robots" : names[0]) + "?")) return;
+  if ((CONFIRM[cmd] || many) && !confirm(cmdText(cmd) + (arg ? " '" + arg + "'" : "") + " voor " + (many ? names.length + " robots" : names[0]) + "?")) return;
   fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ cmd: cmd, robots: names }) })
+                      body: JSON.stringify({ cmd: cmd, robots: names, arg: arg }) })
     .then(function (x) { if (!x.ok) return x.json().then(function (j) { alert(j.error || "geweigerd"); }); refresh(); });
 }
 var lastRobots = [];
@@ -244,16 +329,27 @@ document.addEventListener("click", function (e) {
 });
 document.addEventListener("change", function (e) {
   if (e.target.matches("select[data-robot]") && e.target.value) {
-    send(e.target.value, [e.target.dataset.robot]);
+    var v = e.target.value.split("|");
+    send(v[0], [e.target.dataset.robot], v[1]);
+    e.target.value = "";
+  }
+  if (e.target.matches("select[data-libmap]") && e.target.value) {
+    var target = e.target.value, name = e.target.dataset.libmap;
+    var names = target === "*" ? lastRobots.filter(function (r) { return r.listening; }).map(function (r) { return r.robot; }) : [target];
+    if (!names.length) alert("Geen enkele robot luistert naar de monitor.");
+    else send("map_download", names, name);
     e.target.value = "";
   }
 });
 function controls(r) {
   var dis = control && r.listening ? "" : " disabled";
   var l = (r.data || {}).launch || {};
+  var mapOpts = (l.maps || []).map(function (m) {
+    return '<option value="map_upload|' + esc(m) + '">kaart ' + esc(m) + " naar bibliotheek</option>";
+  }).join("");
   var opts = ["bringup", "slam", "navigation", "joystick", "camera"].map(function (k) {
     return '<option value="' + (l[k] ? "stop:" : "start:") + k + '">' + (l[k] ? "stop " : "start ") + k + "</option>";
-  }).join("") + '<option value="update">bijwerken</option><option value="reboot">herstarten</option><option value="shutdown">uitschakelen</option>';
+  }).join("") + '<option value="update">bijwerken</option><option value="reboot">herstarten</option><option value="shutdown">uitschakelen</option>' + mapOpts;
   var res = r.result ? '<div class="res">' + esc(cmdText(r.result.cmd)) + ": " +
     (r.result.ok === null ? "verstuurd..." : (r.result.ok ? '<span class="g">OK</span> ' : '<span class="r">mislukt</span> ') + esc(r.result.message)) + "</div>" : "";
   return '<div class="btns"><button class="stop" data-cmd="stop_all" data-robot="' + esc(r.robot) + '"' + dis + ">Stop</button>" +
@@ -318,7 +414,39 @@ function refresh() {
     document.getElementById("summary").textContent = on + " van " + rs.length + " robots online - " + new Date().toLocaleTimeString("nl-BE");
   }).catch(function () { document.getElementById("summary").textContent = "monitor niet bereikbaar"; });
 }
+function refreshLib() {
+  fetch("/api/maps").then(function (x) { return x.json(); }).then(function (maps) {
+    if (document.activeElement && document.activeElement.tagName === "SELECT") return;
+    var robotOpts = lastRobots.filter(function (r) { return r.listening; }).map(function (r) {
+      return '<option value="' + esc(r.robot) + '">' + esc(r.robot) + "</option>"; }).join("");
+    var dis = control ? "" : " disabled";
+    document.getElementById("libTable").innerHTML = maps.length ? maps.map(function (m) {
+      return '<tr style="border-top:1px solid var(--border)"><td style="padding:4px 0"><b>' + esc(m.name) + '</b></td>' +
+        '<td class="sub">van ' + esc(m.from || "?") + (m.created ? ", " + new Date(m.created * 1000).toLocaleString("nl-BE") : "") +
+        " - " + m.zones + " zones, " + m.routes + " routes, " + m.size_kb + " kB</td>" +
+        '<td style="text-align:right"><select data-libmap="' + esc(m.name) + '"' + dis + '><option value="">naar robot...</option>' +
+        '<option value="*">alle robots die luisteren</option>' + robotOpts + "</select> " +
+        '<button data-libdel="' + esc(m.name) + '"' + dis + ">Verwijder</button></td></tr>";
+    }).join("") : '<tr><td class="sub">nog leeg</td></tr>';
+  }).catch(function () {});
+}
+document.addEventListener("click", function (e) {
+  var b = e.target.closest("[data-libdel]");
+  if (b && confirm("Kaart '" + b.dataset.libdel + "' uit de bibliotheek verwijderen? (niet van de robots)"))
+    fetch("/api/maps/delete", { method: "POST", headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ name: b.dataset.libdel }) }).then(refreshLib);
+});
+document.getElementById("libFile").addEventListener("change", function (e) {
+  var f = e.target.files[0];
+  if (!f) return;
+  f.text().then(function (t) {
+    return fetch("/api/maps/upload", { method: "POST", headers: { "Content-Type": "application/json" }, body: t });
+  }).then(function (x) { return x.json(); }).then(function (j) {
+    if (j.error) alert("Niet toegevoegd: " + j.error); refreshLib(); e.target.value = "";
+  });
+});
 refresh(); setInterval(refresh, 2000);
+refreshLib(); setInterval(refreshLib, 5000);
 </script></body></html>
 """
 
@@ -329,12 +457,20 @@ def main():
     ap.add_argument("--remote-control", action="store_true",
                     help="knoppen ook toelaten vanaf andere toestellen dan deze laptop")
     ap.add_argument("--view-only", action="store_true", help="enkel kijken: geen knoppen")
+    ap.add_argument("--control-port", type=int, default=0,
+                    help="tweede poort waarop de knoppen altijd werken (Docker: enkel op 127.0.0.1 publiceren)")
     args = ap.parse_args()
     global REMOTE_CONTROL, VIEW_ONLY
     REMOTE_CONTROL = args.remote_control
     VIEW_ONLY = args.view_only
     srv = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
     srv.daemon_threads = True   # waiting /poll requests don't block Ctrl+C
+    if args.control_port:
+        ctl = ThreadingHTTPServer(("0.0.0.0", args.control_port), Handler)
+        ctl.daemon_threads = True
+        ctl.control = True
+        threading.Thread(target=ctl.serve_forever, daemon=True).start()
+        print("Knoppen op poort %d" % args.control_port)
     print("TurtleBot Monitor op http://localhost:%d (robots sturen naar http://<dit-ip>:%d/push)"
           % (args.port, args.port))
     try:
