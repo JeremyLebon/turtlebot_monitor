@@ -9,6 +9,7 @@ Windows, in WSL en op Linux.
     python monitor.py              # http://localhost:8090
     python monitor.py --port 9000
     python monitor.py --remote-control   # knoppen ook vanaf andere toestellen
+    python monitor.py --view-only        # enkel kijken, geen knoppen
 
 Knoppen (stop, piep, bringup, bijwerken, uitschakelen, ...): de robot vraagt
 zelf om opdrachten (long-poll op /poll) - ook dat werkt door de NAT. De knoppen
@@ -39,6 +40,7 @@ results = {}         # hostname -> last result {"cmd", "ok", "message", "t"}
 cond = threading.Condition()
 cmd_seq = [0]
 REMOTE_CONTROL = False
+VIEW_ONLY = False
 ROBOT_COMMANDS = {"stop_all", "beep", "update", "reboot", "shutdown"} | {
     a + ":" + n for a in ("start", "stop") for n in ("bringup", "slam", "navigation", "camera", "joystick")}
 
@@ -90,6 +92,8 @@ class Handler(BaseHTTPRequestHandler):
                                  "message": str(r.get("message", ""))[:300], "t": time.time()}
             return self._send(200, "ok", "text/plain")
         if self.path == "/api/cmd":    # button on the page
+            if VIEW_ONLY:
+                return self._send(403, json.dumps({"error": "monitor gestart met --view-only"}), "application/json")
             if not REMOTE_CONTROL and self.client_address[0] not in ("127.0.0.1", "::1"):
                 return self._send(403, json.dumps({"error": "knoppen enkel vanaf de laptop zelf (localhost)"}),
                                   "application/json")
@@ -144,7 +148,8 @@ class Handler(BaseHTTPRequestHandler):
                     r["result"] = results.get(r["robot"])
                     r["listening"] = time.time() - polling.get(r["robot"], 0) < 30
             return self._send(200, json.dumps({"now": time.time(), "robots": out,
-                                               "control": REMOTE_CONTROL or self.client_address[0] in ("127.0.0.1", "::1")}),
+                                               "control": not VIEW_ONLY and (REMOTE_CONTROL or self.client_address[0] in ("127.0.0.1", "::1")),
+                                               "view_only": VIEW_ONLY}),
                               "application/json")
         if self.path in ("/", "/index.html"):
             return self._send(200, PAGE, "text/html; charset=utf-8")
@@ -301,6 +306,7 @@ function refresh() {
     lastRobots = rs; control = j.control;
     document.querySelectorAll("[data-all]").forEach(function (b) { b.disabled = !control; });
     var listening = rs.filter(function (r) { return r.listening; }).length;
+    document.getElementById("allBar").style.display = j.view_only ? "none" : "";
     document.getElementById("ctrlInfo").textContent = !control ? "knoppen enkel op de laptop van de docent"
       : listening + " robot(s) luisteren naar opdrachten";
     if (document.activeElement && document.activeElement.tagName === "SELECT") return;   // don't close an open menu
@@ -319,9 +325,11 @@ def main():
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--remote-control", action="store_true",
                     help="knoppen ook toelaten vanaf andere toestellen dan deze laptop")
+    ap.add_argument("--view-only", action="store_true", help="enkel kijken: geen knoppen")
     args = ap.parse_args()
-    global REMOTE_CONTROL
+    global REMOTE_CONTROL, VIEW_ONLY
     REMOTE_CONTROL = args.remote_control
+    VIEW_ONLY = args.view_only
     srv = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
     srv.daemon_threads = True   # waiting /poll requests don't block Ctrl+C
     print("TurtleBot Monitor op http://localhost:%d (robots sturen naar http://<dit-ip>:%d/push)"

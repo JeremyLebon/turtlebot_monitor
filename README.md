@@ -75,6 +75,7 @@ plus de firewallregel uit A (`firewall_regel.ps1`). Starten in WSL:
 - De robot vraagt zelf om opdrachten (long-poll op `/poll`), dus ook dit werkt
   door de NAT; een opdracht komt binnen ~1 s aan. Het resultaat staat onder
   de knoppen van de robot.
+- Uitschakelen: `MONITOR_URL=` leeg in monitor.conf (robots sturen niets, luisteren niet), `python monitor.py --view-only` (monitor zonder knoppen), of per robot het vinkje "Monitor-opdrachten toelaten" op de Systeem-pagina.
 - De knoppen werken **enkel vanaf de laptop zelf** (`localhost`), zodat een
   student die de monitor vanaf een robot-AP opent niets kan bedienen. Bewust
   openzetten: `python monitor.py --remote-control`.
