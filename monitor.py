@@ -274,6 +274,8 @@ function tile(r, now) {
     if (b[1] === "y") warns.push("batterij bijna leeg");
     if (s.updates && (s.updates.setup_behind || s.updates.image_behind)) warns.push("update beschikbaar");
     if (s.wifi_signal_dbm != null && s.wifi_signal_dbm < -72) warns.push("zwakke wifi");
+    var chg = l.changes || [];
+    if (chg.length) warns.push(chg.length + " aanpassing(en) t.o.v. de standaard");
     if (msgs.length) level = "bad"; else if (warns.length) level = "warn";
   }
   var temp = s.cpu_temp_c != null ? Math.round(s.cpu_temp_c) + " °C" : "--";
@@ -297,7 +299,8 @@ function tile(r, now) {
       "<span>Uptime</span><span>" + (s.uptime_seconds ? ago(s.uptime_seconds) : "--") + "</span>" +
       "</div><div class=\"chips\">" + chips + "</div>" +
       msgs.map(function (m) { return '<div class="alert">' + esc(m) + "</div>"; }).join("") +
-      (warns.length ? '<div class="warnmsg">' + esc(warns.join(", ")) + "</div>" : "") + controls(r) : "") +
+      (warns.length ? '<div class="warnmsg" title="' + esc((l.changes || []).map(function (c) { return "- " + c.text; }).join("\n")) + '">' +
+        esc(warns.join(", ")) + "</div>" : "") + controls(r) : "") +
     '<div class="sub" style="margin-top:8px"><a href="http://10.0.' + Number(r.nr) + '.10:8080/" target="_blank">statuspagina</a> (wifi TB-AP-' + nr + ")</div></div>";
 }
 function refresh() {
