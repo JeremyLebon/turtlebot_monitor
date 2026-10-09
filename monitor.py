@@ -22,13 +22,16 @@ en geef de laptop een vast IP op het switch-subnet. Windows: sta Python toe
 in de firewall (privénetwerk) wanneer daarom gevraagd wordt.
 """
 import argparse
+import base64
 import csv
 import glob
+import io
 import json
 import os
 import re
 import threading
 import time
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -51,6 +54,23 @@ def library():
         except (OSError, ValueError):
             continue
     return out
+
+
+def bundle_from_zip(data):
+    """Zip from nav.html "Exporteer" (<kaart>.yaml + .pgm, zones, routes) -> bundle."""
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        names = z.namelist()
+        yaml_name = next(n for n in names if n.endswith(".yaml"))
+        yaml_text = z.read(yaml_name).decode()
+        m = re.search(r"(?m)^image:\s*(\S+)", yaml_text)
+        img = os.path.join(os.path.dirname(yaml_name), os.path.basename(m.group(1))) if m else yaml_name[:-5] + ".pgm"
+        stem = yaml_name[:-5]
+
+        def opt(suffix, key, default):
+            return json.loads(z.read(stem + suffix)).get(key, default) if stem + suffix in names else default
+        return {"format": "turtlebot-map/1", "name": os.path.basename(stem), "from": "zip", "created": time.time(),
+                "yaml": yaml_text, "pgm_b64": base64.b64encode(z.read(img)).decode(),
+                "zones": opt(".zones.json", "zones", []), "routes": opt(".routes.json", "routes", {})}
 
 
 def store_map(name, bundle):
@@ -148,11 +168,13 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, KeyError, TypeError, OSError):
                 return self._send(400, "bad request", "text/plain")
             return self._send(200, json.dumps({"ok": True}), "application/json")
-        if self.path == "/api/maps/upload":   # .tbmap.json from the laptop (nav.html export)
+        if self.path == "/api/maps/upload":   # zip (nav.html "Exporteer") or .tbmap.json from the laptop
             try:
-                b = self._read_json()
+                n = int(self.headers.get("Content-Length", 0))
+                data = self.rfile.read(min(n, 20 * 1024 * 1024))
+                b = bundle_from_zip(data) if data[:2] == b"PK" else json.loads(data)
                 store_map(str(b.get("name", "")), b)
-            except (ValueError, TypeError, OSError) as exc:
+            except (ValueError, TypeError, OSError, KeyError, StopIteration, zipfile.BadZipFile) as exc:
                 return self._send(400, json.dumps({"error": str(exc) or "geen geldige kaartbundel"}), "application/json")
             return self._send(200, json.dumps({"ok": True}), "application/json")
         if self.path == "/api/cmd":    # button on the page
@@ -283,8 +305,8 @@ button:disabled, select:disabled { opacity:.4; cursor:default; }
   "meer... &gt; kaart X naar bibliotheek"; daarna kan ze naar andere robots. Bestaat de kaart daar al, dan wordt de oude
   eerst hernoemd naar &lt;naam&gt;_vorige.</span>
   <table style="width:100%;margin-top:8px;font-size:.85rem;border-collapse:collapse" id="libTable"></table>
-  <div style="margin-top:8px"><label class="sub">Kaartbundel van je laptop toevoegen (.tbmap.json, export van nav.html):
-    <input type="file" id="libFile" accept=".json"></label></div>
+  <div style="margin-top:8px"><label class="sub">Kaart van je laptop toevoegen (zip van "Exporteer" op nav.html):
+    <input type="file" id="libFile" accept=".zip,.json"></label></div>
 </div>
 <p class="sub">Elke robot stuurt elke 5 s zijn status. Groen = alles in orde, geel = aandacht, rood = probleem, grijs = niets ontvangen.
 Statuspagina per robot: enkel bereikbaar als je laptop op de wifi van die robot zit (TB-AP-&lt;nr&gt;).</p>
@@ -439,8 +461,8 @@ document.addEventListener("click", function (e) {
 document.getElementById("libFile").addEventListener("change", function (e) {
   var f = e.target.files[0];
   if (!f) return;
-  f.text().then(function (t) {
-    return fetch("/api/maps/upload", { method: "POST", headers: { "Content-Type": "application/json" }, body: t });
+  f.arrayBuffer().then(function (buf) {
+    return fetch("/api/maps/upload", { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: buf });
   }).then(function (x) { return x.json(); }).then(function (j) {
     if (j.error) alert("Niet toegevoegd: " + j.error); refreshLib(); e.target.value = "";
   });
