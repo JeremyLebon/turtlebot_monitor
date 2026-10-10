@@ -107,6 +107,85 @@ def queue_command(names, cmd, arg=None):
         cond.notify_all()
 
 
+# "Alles bijwerken": robots in groepjes van <parallel> bijwerken i.p.v. alle
+# tegelijk (internet van de switch + container-herstart midden in de les).
+# Een robot is klaar als zijn update-service niet meer "activating" is
+# (launch.update, robots vanaf image 2026-10-10); oudere robots sturen dat
+# niet mee: dan klaar na offline->online (container herstart) of na 6 min.
+UPDATE_TIMEOUT = 35 * 60        # unit: TimeoutStartSec=30min
+UPDATE_FALLBACK = 6 * 60
+upd = {"waiting": [], "running": {}, "done": {}, "parallel": 2, "started": None}
+
+
+def update_queue_start(names, parallel):
+    with cond:
+        busy = set(upd["waiting"]) | set(upd["running"])
+        if not busy:
+            upd["done"] = {}
+            upd["started"] = time.time()
+        upd["parallel"] = max(1, min(int(parallel), 9))
+        upd["waiting"] += [n for n in names if n not in busy]
+
+
+def update_queue_tick():
+    now = time.time()
+    with lock:
+        seen = dict(robots)
+    with cond:
+        for name, r in list(upd["running"].items()):
+            info = seen.get(name, {})
+            online = now - info.get("seen", 0) < 20
+            res = results.get(name) or {}
+            u = ((info.get("data") or {}).get("launch") or {}).get("update")
+            done = None
+            if res.get("cmd") == "update" and res.get("ok") is False:
+                done = (False, res.get("message") or "update niet gestart")
+            elif u:
+                r["info"] = True
+                if u.get("state") == "activating":
+                    r["active"] = True
+                elif u.get("finished") and u["finished"] > r["t"] - 5:
+                    ok = u.get("state") == "active" and u.get("result") == "success"
+                    done = (ok, "OK" if ok else "mislukt: " + str(u.get("message") or u.get("result")))
+            elif not r.get("info"):
+                if not online:
+                    r["went_off"] = True
+                elif r.get("went_off") or now - r["t"] > UPDATE_FALLBACK:
+                    done = (True, "vermoedelijk OK (oude software meldt geen updatestatus)")
+            if not done and now - r["t"] > UPDATE_TIMEOUT:
+                done = (False, "time-out")
+            if not done and not online and now - info.get("seen", 0) > 600:
+                done = (False, "robot al 10 min offline")
+            if done:
+                upd["done"][name] = {"ok": done[0], "message": done[1], "t": now}
+                del upd["running"][name]
+        while upd["waiting"] and len(upd["running"]) < upd["parallel"]:
+            name = upd["waiting"].pop(0)
+            if now - polling.get(name, 0) > 30:
+                upd["done"][name] = {"ok": False, "message": "luisterde niet naar de monitor - overgeslagen", "t": now}
+                continue
+            upd["running"][name] = {"t": now}
+            cmd_seq[0] += 1
+            pending.setdefault(name, []).append({"id": cmd_seq[0], "cmd": "update", "t": now})
+            results[name] = {"cmd": "update", "ok": None, "message": "verstuurd...", "t": now}
+            cond.notify_all()
+
+
+def update_queue_loop():
+    while True:
+        try:
+            update_queue_tick()
+        except Exception as exc:     # never let the queue thread die
+            print("update-wachtrij:", exc)
+        time.sleep(3)
+
+
+def update_queue_state():
+    with cond:
+        return {"waiting": list(upd["waiting"]), "running": sorted(upd["running"]),
+                "done": dict(upd["done"]), "parallel": upd["parallel"], "started": upd["started"]}
+
+
 def expected_robots():
     """Robots from turtlebot_config.csv, so never-seen robots show up too."""
     try:
@@ -177,6 +256,21 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, TypeError, OSError, KeyError, StopIteration, zipfile.BadZipFile) as exc:
                 return self._send(400, json.dumps({"error": str(exc) or "geen geldige kaartbundel"}), "application/json")
             return self._send(200, json.dumps({"ok": True}), "application/json")
+        if self.path in ("/api/update_all", "/api/update_all/cancel"):
+            if not self._may_control():
+                return self._send(403, json.dumps({"error": "knoppen enkel vanaf de laptop zelf (localhost)"}),
+                                  "application/json")
+            if self.path.endswith("/cancel"):
+                with cond:
+                    upd["waiting"] = []    # running updates finish by themselves
+                return self._send(200, json.dumps({"ok": True}), "application/json")
+            try:
+                r = self._read_json()
+                names = [str(n)[:40] for n in r["robots"]]
+                update_queue_start(names, r.get("parallel", 2))
+            except (ValueError, KeyError, TypeError):
+                return self._send(400, "bad request", "text/plain")
+            return self._send(200, json.dumps({"queued": len(names)}), "application/json")
         if self.path == "/api/cmd":    # button on the page
             if VIEW_ONLY:
                 return self._send(403, json.dumps({"error": "monitor gestart met --view-only"}), "application/json")
@@ -246,6 +340,7 @@ class Handler(BaseHTTPRequestHandler):
                     r["result"] = results.get(r["robot"])
                     r["listening"] = time.time() - polling.get(r["robot"], 0) < 30
             return self._send(200, json.dumps({"now": time.time(), "robots": out,
+                                               "update_queue": update_queue_state(),
                                                "control": self._may_control(),
                                                "view_only": VIEW_ONLY}),
                               "application/json")
@@ -295,10 +390,13 @@ button:disabled, select:disabled { opacity:.4; cursor:default; }
   <b>Alle robots:</b>
   <button class="stop" data-all="stop_all" title="Alle launches stoppen - motoren stil">STOP ALLES</button>
   <button data-all="start:bringup">Bringup starten</button>
-  <button data-all="update" title="Software bijwerken (git + Docker-image)">Bijwerken</button>
+  <button id="updAll" title="Software bijwerken (git + Docker-image), in groepjes zodat internet en lessen niet vastlopen">Alles bijwerken</button>
+  <select id="updPar" title="Hoeveel robots tegelijk"><option value="1">1 tegelijk</option><option value="2" selected>2 tegelijk</option><option value="3">3 tegelijk</option></select>
+  <button id="updCancel" style="display:none" title="Wachtende robots niet meer bijwerken (lopende updates werken af)">Wachtrij stoppen</button>
   <button data-all="shutdown" title="Alle robots uitschakelen (einde les)">Uitschakelen</button>
   <span class="sub" id="ctrlInfo"></span>
 </div>
+<div class="bar" id="updBox" style="display:none"></div>
 <div class="grid" id="grid"></div>
 <div class="bar" style="margin-top:14px;display:block" id="libBox">
   <b>Kaartenbibliotheek</b> <span class="sub">- kaart + zones + routes. Een robot stuurt een kaart hierheen via
@@ -345,6 +443,33 @@ document.querySelectorAll("[data-all]").forEach(function (b) {
     } else send(cmd, names);
   });
 });
+function post(url, body) {
+  return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) })
+    .then(function (x) { if (!x.ok) return x.json().then(function (j) { alert(j.error || "geweigerd"); }); refresh(); });
+}
+document.getElementById("updAll").addEventListener("click", function () {
+  var names = lastRobots.filter(function (r) { return r.listening; }).map(function (r) { return r.robot; });
+  if (!names.length) { alert("Geen enkele robot luistert naar de monitor."); return; }
+  var par = document.getElementById("updPar").value;
+  if (!confirm("Software bijwerken voor " + names.length + " robots, " + par + " tegelijk?\n" +
+               "Bij een nieuwe image herstart de container: lopende launches stoppen.")) return;
+  post("/api/update_all", { robots: names, parallel: Number(par) });
+});
+document.getElementById("updCancel").addEventListener("click", function () { post("/api/update_all/cancel"); });
+function renderUpdate(q) {
+  var box = document.getElementById("updBox");
+  var done = Object.keys(q.done), busy = q.running.length + q.waiting.length;
+  document.getElementById("updCancel").style.display = q.waiting.length ? "" : "none";
+  if (!busy && !done.length) { box.style.display = "none"; return; }
+  box.style.display = "";
+  var ok = done.filter(function (n) { return q.done[n].ok; }).length;
+  box.innerHTML = "<b>Bijwerken:</b> " + (busy ? "bezig" : "klaar") + " - " + ok + " OK, " + (done.length - ok) + " mislukt, " +
+    q.running.length + " bezig, " + q.waiting.length + " wachtend" +
+    (q.running.length ? ' <span class="sub">(nu: ' + esc(q.running.join(", ")) + ")</span>" : "") +
+    done.filter(function (n) { return !q.done[n].ok; }).map(function (n) {
+      return '<div class="r" style="width:100%;font-size:.8rem">' + esc(n) + ": " + esc(q.done[n].message) + "</div>";
+    }).join("");
+}
 document.addEventListener("click", function (e) {
   var b = e.target.closest("[data-cmd]");
   if (b) send(b.dataset.cmd, [b.dataset.robot]);
@@ -425,6 +550,8 @@ function refresh() {
   fetch("/api/robots").then(function (x) { return x.json(); }).then(function (j) {
     var rs = j.robots.slice().sort(function (a, b) { return Number(a.nr) - Number(b.nr); });
     lastRobots = rs; control = j.control;
+    if (j.update_queue) renderUpdate(j.update_queue);
+    document.getElementById("updAll").disabled = !control || !!(j.update_queue && (j.update_queue.running.length || j.update_queue.waiting.length));
     document.querySelectorAll("[data-all]").forEach(function (b) { b.disabled = !control; });
     var listening = rs.filter(function (r) { return r.listening; }).length;
     document.getElementById("allBar").style.display = j.view_only ? "none" : "";
@@ -485,6 +612,7 @@ def main():
     global REMOTE_CONTROL, VIEW_ONLY
     REMOTE_CONTROL = args.remote_control
     VIEW_ONLY = args.view_only
+    threading.Thread(target=update_queue_loop, daemon=True).start()
     srv = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
     srv.daemon_threads = True   # waiting /poll requests don't block Ctrl+C
     if args.control_port:
