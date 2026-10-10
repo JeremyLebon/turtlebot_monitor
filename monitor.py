@@ -23,12 +23,14 @@ in de firewall (privénetwerk) wanneer daarom gevraagd wordt.
 """
 import argparse
 import base64
+import hashlib
 import csv
 import glob
 import io
 import json
 import os
 import re
+import secrets
 import threading
 import time
 import zipfile
@@ -91,7 +93,7 @@ cond = threading.Condition()
 cmd_seq = [0]
 REMOTE_CONTROL = False
 VIEW_ONLY = False
-ROBOT_COMMANDS = {"stop_all", "beep", "update", "reboot", "shutdown", "map_upload", "map_download"} | {
+ROBOT_COMMANDS = {"stop_all", "beep", "update", "reboot", "shutdown", "map_upload", "map_download", "set_pin"} | {
     a + ":" + n for a in ("start", "stop") for n in ("bringup", "slam", "navigation", "camera", "joystick")}
 
 
@@ -186,6 +188,14 @@ def update_queue_state():
                 "done": dict(upd["done"]), "parallel": upd["parallel"], "started": upd["started"]}
 
 
+def pin_hash(pin):
+    """Same format as fenix_admin.py on the robot (Beheer-PIN); only this hash
+    is sent to the robots, never the PIN."""
+    salt = secrets.token_hex(16)
+    h = hashlib.pbkdf2_hmac("sha256", pin.encode(), bytes.fromhex(salt), 200000).hex()
+    return "pbkdf2_sha256:200000:%s:%s" % (salt, h)
+
+
 def expected_robots():
     """Robots from turtlebot_config.csv, so never-seen robots show up too."""
     try:
@@ -270,6 +280,19 @@ class Handler(BaseHTTPRequestHandler):
                 update_queue_start(names, r.get("parallel", 2))
             except (ValueError, KeyError, TypeError):
                 return self._send(400, "bad request", "text/plain")
+            return self._send(200, json.dumps({"queued": len(names)}), "application/json")
+        if self.path == "/api/set_pin":   # docenten-PIN (Beheer) for every listening robot
+            if not self._may_control():
+                return self._send(403, json.dumps({"error": "knoppen enkel vanaf de laptop zelf (localhost)"}),
+                                  "application/json")
+            try:
+                r = self._read_json()
+                pin, names = str(r["pin"]), [str(n)[:40] for n in r["robots"]]
+            except (ValueError, KeyError, TypeError):
+                return self._send(400, "bad request", "text/plain")
+            if not (pin.isdigit() and 4 <= len(pin) <= 8):
+                return self._send(400, json.dumps({"error": "PIN moet 4 tot 8 cijfers zijn"}), "application/json")
+            queue_command(names, "set_pin", pin_hash(pin))
             return self._send(200, json.dumps({"queued": len(names)}), "application/json")
         if self.path == "/api/cmd":    # button on the page
             if VIEW_ONLY:
@@ -394,6 +417,7 @@ button:disabled, select:disabled { opacity:.4; cursor:default; }
   <select id="updPar" title="Hoeveel robots tegelijk"><option value="1">1 tegelijk</option><option value="2" selected>2 tegelijk</option><option value="3">3 tegelijk</option></select>
   <button id="updCancel" style="display:none" title="Wachtende robots niet meer bijwerken (lopende updates werken af)">Wachtrij stoppen</button>
   <button data-all="shutdown" title="Alle robots uitschakelen (einde les)">Uitschakelen</button>
+  <button id="pinAll" title="Docenten-PIN voor Beheer op de statuspagina, voor alle robots die luisteren (enkel de hash gaat naar de robots)">Docenten-PIN</button>
   <span class="sub" id="ctrlInfo"></span>
 </div>
 <div class="bar" id="updBox" style="display:none"></div>
@@ -417,7 +441,7 @@ function batt(v) {   // 0 % = 11.0 V: there the OpenCR switches the motors off
   return [v.toFixed(1) + " V (" + Math.round(p) + " %)", v < 11.2 ? "r" : v < 11.4 ? "y" : "g"];
 }
 var CMD_TEXT = { stop_all: "stop alles", beep: "piep", update: "bijwerken", reboot: "herstarten", shutdown: "uitschakelen",
-                 map_upload: "kaart naar bibliotheek", map_download: "kaart uit bibliotheek" };
+                 map_upload: "kaart naar bibliotheek", map_download: "kaart uit bibliotheek", set_pin: "PIN instellen" };
 function cmdText(c) {
   if (CMD_TEXT[c]) return CMD_TEXT[c];
   var p = c.split(":"); return (p[0] === "start" ? "start " : "stop ") + p[1];
@@ -454,6 +478,15 @@ document.getElementById("updAll").addEventListener("click", function () {
   if (!confirm("Software bijwerken voor " + names.length + " robots, " + par + " tegelijk?\n" +
                "Bij een nieuwe image herstart de container: lopende launches stoppen.")) return;
   post("/api/update_all", { robots: names, parallel: Number(par) });
+});
+document.getElementById("pinAll").addEventListener("click", function () {
+  var names = lastRobots.filter(function (r) { return r.listening; }).map(function (r) { return r.robot; });
+  if (!names.length) { alert("Geen enkele robot luistert naar de monitor."); return; }
+  var pin = prompt("Nieuwe docenten-PIN voor Beheer (4-8 cijfers), voor " + names.length + " robots:");
+  if (pin === null) return;
+  if (!/^[0-9]{4,8}$/.test(pin)) { alert("PIN moet 4 tot 8 cijfers zijn."); return; }
+  if (prompt("Nog eens:") !== pin) { alert("De PIN's verschillen - niets veranderd."); return; }
+  post("/api/set_pin", { pin: pin, robots: names });
 });
 document.getElementById("updCancel").addEventListener("click", function () { post("/api/update_all/cancel"); });
 function renderUpdate(q) {

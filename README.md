@@ -99,3 +99,13 @@ zelf - geen mirrored networking of port proxy nodig, wel de firewallregel
 - Op een robot (statuspagina > Systeem) staat of het versturen lukt.
 - Zonder monitor (laptop weg) proberen de robots het om de 30 s opnieuw -
   ze merken er verder niets van.
+
+## Docenten-PIN voor de hele vloot
+
+Knop **Docenten-PIN** in de balk "Alle robots": vraagt de PIN (4-8 cijfers)
+twee keer en stuurt naar elke robot die luistert enkel de PBKDF2-hash (zelfde
+formaat als `fenix_admin.py` op de robot). Daarmee ontgrendel je **Beheer** op
+de statuspagina. Een robot die niet luistert (uit, of "Monitor-opdrachten"
+uit) krijgt hem niet - dan later opnieuw, of op die robot zelf:
+`docker exec -it turtlebot_<nr> fenix_admin.py set`.
+
