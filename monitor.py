@@ -536,10 +536,38 @@ function controls(r) {
     '<button data-cmd="beep" data-robot="' + esc(r.robot) + '"' + dis + ' title="Laat de robot piepen, om hem terug te vinden">Piep</button>' +
     '<select data-robot="' + esc(r.robot) + '"' + dis + '><option value="">meer...</option>' + opts + "</select></div>" + res;
 }
-function tile(r, now) {
+// Robot state from the launches (the active control source itself isn't in
+// the monitor payload): what the class is doing at a glance
+function robotState(l) {
+  if (!l.bringup) return ["Inactief", ""];
+  if (l.navigation) return ["Navigatie", "g"];
+  if (l.slam) return ["Kaart maken", "g"];
+  return ["Bringup", "g"];
+}
+var SVC_NAME = { zenoh: "Zenoh", rosbridge: "rosbridge", webpagina: "webpagina", launch_control: "launch control",
+                 twist_mux: "twist_mux", cmd_vel_guard: "cmd_vel_guard", nav_web: "nav-web", system_info: "systeeminfo" };
+// Since 0.20/0.23 the robots send which services stopped or crashed and the
+// last ERROR/FATAL lines from /rosout (system_info_node)
+function health(s, msgs, warns, tips) {
+  var sv = s.services || {};
+  Object.keys(sv).forEach(function (k) {
+    // terminal: deliberately off without a password (older images report false)
+    if (sv[k] === false && k !== "terminal") msgs.push("Dienst gestopt: " + (SVC_NAME[k] || k));
+  });
+  var sup = s.supervisor || {}, t = s.time_unix || 0;
+  Object.keys(sup).forEach(function (k) {
+    if (sup[k].last > t - 600) warns.push((SVC_NAME[k] || k) + " gecrasht + herstart");
+  });
+  var errs = (s.rosout_errors || []).filter(function (e) { return e.t > t - 300; });
+  if (errs.length) {
+    warns.push(errs.length + " ROS-fout(en) laatste 5 min");
+    errs.forEach(function (e) { tips.push(e.level + " " + e.node + ": " + e.msg); });
+  }
+}
+function tile(r, now, common) {
   var d = r.data || {}, s = d.status || {}, l = d.launch || {};
   var age = r.seen ? now - r.seen : null, online = age != null && age < 20;
-  var level = "ok", msgs = [], warns = [];
+  var level = "ok", msgs = [], warns = [], tips = [];
   if (!online) level = "off";
   var b = batt(online ? d.battery_v : null);
   if (online) {
@@ -552,6 +580,10 @@ function tile(r, now) {
     if (s.wifi_signal_dbm != null && s.wifi_signal_dbm < -72) warns.push("zwakke wifi");
     var chg = l.changes || [];
     if (chg.length) warns.push(chg.length + " aanpassing(en) t.o.v. de standaard");
+    chg.forEach(function (c) { tips.push(c.text); });
+    health(s, msgs, warns, tips);
+    var v = (s.image_version || "").split(" ")[0];
+    if (common && v && v !== common) warns.push("andere versie dan de rest (" + common + ")");
     if (msgs.length) level = "bad"; else if (warns.length) level = "warn";
   }
   var temp = s.cpu_temp_c != null ? Math.round(s.cpu_temp_c) + " °C" : "--";
@@ -565,6 +597,7 @@ function tile(r, now) {
     '<div class="name"><span>' + esc(r.robot) + '</span><span class="sub">' +
       (online ? '<span class="g">online</span>' : r.seen ? "offline sinds " + ago(age) : "nooit gezien") + "</span></div>" +
     (online ? '<div class="kv">' +
+      "<span>Toestand</span><span class=\"" + robotState(l)[1] + "\">" + robotState(l)[0] + "</span>" +
       "<span>Batterij</span><span class=\"" + b[1] + "\">" + b[0] + "</span>" +
       "<span>CPU</span><span>" + (s.cpu_load_1min != null ? s.cpu_load_1min : "--") + ' load, <span class="' + tc + '">' + temp + "</span></span>" +
       "<span>Wifi</span><span>" + (s.wifi_signal_dbm != null ? s.wifi_signal_dbm + " dBm" : "--") + "</span>" +
@@ -575,7 +608,7 @@ function tile(r, now) {
       "<span>Uptime</span><span>" + (s.uptime_seconds ? ago(s.uptime_seconds) : "--") + "</span>" +
       "</div><div class=\"chips\">" + chips + "</div>" +
       msgs.map(function (m) { return '<div class="alert">' + esc(m) + "</div>"; }).join("") +
-      (warns.length ? '<div class="warnmsg" title="' + esc((l.changes || []).map(function (c) { return "- " + c.text; }).join("\n")) + '">' +
+      (warns.length ? '<div class="warnmsg" title="' + esc(tips.map(function (t) { return "- " + t; }).join("\n")) + '">' +
         esc(warns.join(", ")) + "</div>" : "") + controls(r) : "") +
     '<div class="sub" style="margin-top:8px"><a href="http://10.0.' + Number(r.nr) + '.10:8080/" target="_blank">statuspagina</a> (wifi TB-AP-' + nr + ")</div></div>";
 }
@@ -591,9 +624,16 @@ function refresh() {
     document.getElementById("ctrlInfo").textContent = !control ? "knoppen enkel op de laptop van de docent"
       : listening + " robot(s) luisteren naar opdrachten";
     if (document.activeElement && document.activeElement.tagName === "SELECT") return;   // don't close an open menu
-    document.getElementById("grid").innerHTML = rs.map(function (r) { return tile(r, j.now); }).join("");
-    var on = rs.filter(function (r) { return r.seen && j.now - r.seen < 20; }).length;
-    document.getElementById("summary").textContent = on + " van " + rs.length + " robots online - " + new Date().toLocaleTimeString("nl-BE");
+    // most common software version of the online robots (whole class on one version)
+    var on = rs.filter(function (r) { return r.seen && j.now - r.seen < 20; });
+    var count = {}, common = "";
+    on.forEach(function (r) { var v = (((r.data || {}).status || {}).image_version || "").split(" ")[0]; if (v) count[v] = (count[v] || 0) + 1; });
+    Object.keys(count).forEach(function (v) { if (!common || count[v] > count[common]) common = v; });
+    if (Object.keys(count).length < 2) common = "";
+    document.getElementById("grid").innerHTML = rs.map(function (r) { return tile(r, j.now, common); }).join("");
+    var bad = document.querySelectorAll(".tile.bad").length, warn = document.querySelectorAll(".tile.warn").length;
+    document.getElementById("summary").textContent = on.length + " van " + rs.length + " robots online" +
+      (bad ? ", " + bad + " met een probleem" : "") + (warn ? ", " + warn + " met aandacht" : "") + " - " + new Date().toLocaleTimeString("nl-BE");
   }).catch(function () { document.getElementById("summary").textContent = "monitor niet bereikbaar"; });
 }
 function refreshLib() {
