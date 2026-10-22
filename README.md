@@ -11,10 +11,10 @@ pakketten.
 
 ## 1. Adres instellen (eenmalig)
 
-1. Geef de laptop een **vast IP** op het subnet van de switch
-   (DHCP-reservatie in de router van de switch).
-2. Zet dat adres in [`../monitor.conf`](../monitor.conf), commit en push:
-   `MONITOR_URL=http://<ip-van-de-laptop>:8090/push`
+1. Geef de laptop of de RPi (optie E) een **vast IP** op het subnet van de
+   switch (DHCP-reservatie in de router van de switch).
+2. Zet dat adres in `monitor.conf` van de repo **`turtlebot_robot`**, commit
+   en push: `MONITOR_URL=http://<ip-van-de-monitor>:8090/push`
 3. Op elke robot: **Software bijwerken** (statuspagina > Systeem). De setup
    zet `MONITOR_URL` in de `.env`, de container start opnieuw.
 
@@ -91,6 +91,58 @@ kijken zonder knoppen; 8091 wordt enkel op 127.0.0.1 gepubliceerd, zodat
 niemand anders kan bedienen. Docker Desktop zet poort 8090 open op Windows
 zelf - geen mirrored networking of port proxy nodig, wel de firewallregel
 (`firewall_regel.ps1`). De kaartenbibliotheek blijft in `monitor/maps/`.
+
+### E. Eigen Raspberry Pi 5 (vast in het lokaal)
+
+Een RPi5 met kabel aan de switch draait de monitor altijd, ook zonder laptop.
+Met een scherm eraan toont hij de pagina schermvullend vanaf het opstarten.
+Geen eigen image nodig: dezelfde `docker-compose.yaml` (optie D), het
+Python-image bestaat ook voor arm64.
+
+1. Raspberry Pi OS **64-bit** op de SD-kaart (Raspberry Pi Imager): de
+   gewone versie met desktop als er een scherm aan komt, anders Lite. Zet in
+   de Imager een gebruiker, SSH aan en geen wifi (kabel).
+2. Vanaf je laptop de map `monitor/` en `turtlebot_config.csv` kopiëren
+   (in de map `turtlebot_setup`):
+
+   ```sh
+   ssh <gebruiker>@<ip-rpi> mkdir -p turtlebot_monitor
+   scp -r monitor turtlebot_config.csv <gebruiker>@<ip-rpi>:turtlebot_monitor/
+   ```
+
+3. Op de RPi (via `ssh`):
+
+   ```sh
+   bash ~/turtlebot_monitor/monitor/install_rpi.sh
+   sudo reboot
+   ```
+
+   Het script installeert Docker, start de monitor (die start daarna bij elke
+   opstart vanzelf) en - als er een desktop is - meldt automatisch aan, houdt
+   het scherm aan en opent de pagina schermvullend (`kiosk.sh`, Chromium).
+   Afsluiten: Alt+F4.
+4. Het IP van de RPi vast zetten (DHCP-reservatie) en in `monitor.conf` van
+   `turtlebot_robot` zetten (stap 1 bovenaan).
+
+**Scherm met of zonder knoppen.** Standaard toont het scherm de pagina
+**zonder knoppen** (poort 8090): wie voor het scherm staat, kan niets
+bedienen. `install_rpi.sh --knoppen` toont de pagina met knoppen (poort 8091):
+dan kan iedereen met een muis of aanraakscherm aan de RPi ook *STOP ALLES*,
+bijwerken of uitschakelen. `--geen-scherm` zet het scherm-opstarten uit.
+Opnieuw uitvoeren met een andere optie mag.
+
+**Knoppen vanaf je laptop.** De knoppen werken enkel op de RPi zelf. Vanaf je
+laptop via een SSH-tunnel:
+
+```sh
+ssh -L 8091:localhost:8091 <gebruiker>@<ip-rpi>
+```
+
+en dan http://localhost:8091 op de laptop (zolang de tunnel open staat).
+
+**Bijwerken.** Kopieer `monitor/` en `turtlebot_config.csv` opnieuw (stap 2;
+`monitor/maps/` op de RPi is de kaartenbibliotheek - niet overschrijven met een
+oudere versie) en op de RPi: `cd ~/turtlebot_monitor/monitor && docker compose restart`.
 
 ## Testen
 

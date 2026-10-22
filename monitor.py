@@ -16,9 +16,10 @@ zelf om opdrachten (long-poll op /poll) - ook dat werkt door de NAT. De knoppen
 werken standaard enkel vanaf deze laptop (localhost): een student die vanaf
 een robot-AP de monitor opent, kan niets bedienen.
 
-De robots moeten deze laptop kunnen bereiken: zet het adres in
-turtlebot_setup/monitor.conf (MONITOR_URL=http://<ip-van-de-laptop>:8090/push)
-en geef de laptop een vast IP op het switch-subnet. Windows: sta Python toe
+De robots moeten deze laptop (of de RPi, README optie E) kunnen bereiken: zet
+het adres in turtlebot_robot/monitor.conf
+(MONITOR_URL=http://<ip-van-de-monitor>:8090/push) en geef de monitor een vast
+IP op het switch-subnet. Windows: sta Python toe
 in de firewall (privénetwerk) wanneer daarom gevraagd wordt.
 """
 import argparse
