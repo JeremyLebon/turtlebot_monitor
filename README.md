@@ -85,6 +85,11 @@ plus de firewallregel uit A (`firewall_regel.ps1`). Starten in WSL:
   `docker exec -it turtlebot-monitor python monitor.py --set-pin`). Enkel de
   hash staat in `monitor/docent_pin`. Bewust voor iedereen openzetten:
   `python monitor.py --remote-control`.
+- **Wifikanalen** (robot-image 1.3.0+): de balk *Wifikanalen* toont welke
+  robot op welk kanaal zit; geel = meer robots op een kanaal dan gepland, of
+  2.4 GHz. Een robot op een ander 5 GHz-kanaal dan gepland krijgt een
+  waarschuwing. Het plan staat in `monitor/wifi_kanalen.csv` (uit
+  `docs/ap-migration.md`); pas het aan de tafelschikking in het lokaal aan.
 - Rijden kan niet via de monitor (vertraging, geen zicht op de robot) - daarvoor
   de statuspagina op de wifi van de robot of de joystick.
 

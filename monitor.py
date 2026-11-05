@@ -231,6 +231,20 @@ sessions = {}        # cookie token -> expiry ("Docent aanmelden")
 login_fails = {}     # ip -> [wrong PINs in a row, locked until]
 
 
+WIFI_PLAN_CSV = os.path.join(HERE, "wifi_kanalen.csv")
+
+
+def wifi_plan():
+    """Planned AP channel per robot (docs/ap-migration.md; adapt to the table
+    layout in the room): {"9": {"5": 36, "2.4": 11}}."""
+    try:
+        with open(WIFI_PLAN_CSV, newline="") as f:
+            return {r["nr"].strip(): {"5": int(r["kanaal_5ghz"]), "2.4": int(r["kanaal_24ghz"])}
+                    for r in csv.DictReader(f)}
+    except (OSError, KeyError, ValueError):
+        return {}
+
+
 def expected_robots():
     """Robots from turtlebot_config.csv, so never-seen robots show up too."""
     try:
@@ -446,7 +460,8 @@ class Handler(BaseHTTPRequestHandler):
                                                "control": self._may_control(),
                                                "session": self._session() is not None,
                                                "pin_set": bool(load_pin()),
-                                               "view_only": VIEW_ONLY}),
+                                               "view_only": VIEW_ONLY,
+                                               "wifi_plan": wifi_plan()}),
                               "application/json")
         if self.path.split("?")[0] in ("/", "/index.html"):   # also "/?kiosk" (kiosk.sh)
             return self._send(200, PAGE, "text/html; charset=utf-8")
@@ -515,6 +530,7 @@ button:disabled, select:disabled { opacity:.4; cursor:default; }
   <span class="sub" id="ctrlInfo"></span>
 </div>
 <div class="bar" id="updBox" style="display:none"></div>
+<div class="bar" id="chanBox" style="display:none"></div>
 <div class="grid" id="grid"></div>
 <div class="bar" style="margin-top:14px;display:block" id="libBox">
   <b>Kaartenbibliotheek</b> <span class="sub">- kaart + zones + routes. Een robot stuurt een kaart hierheen via
@@ -731,6 +747,12 @@ function tile(r, now, common) {
     health(s, msgs, warns, tips);
     var v = (s.image_version || "").split(" ")[0];
     if (common && v && v !== common) warns.push("andere versie dan de rest (" + common + ")");
+    var plan = ((lastJ || {}).wifi_plan || {})[String(Number(r.nr))];
+    if (s.wifi_band && plan) {
+      if (s.wifi_band === "2.4 GHz") warns.push("wifi op 2.4 GHz i.p.v. 5 GHz (laptop of robot zonder 5 GHz?)");
+      else if (s.wifi_band === "5 GHz" && s.wifi_channel !== plan["5"])
+        warns.push("wifikanaal " + s.wifi_channel + ", gepland " + plan["5"] + " (instelling van de AP)");
+    }
     if (msgs.length) level = "bad"; else if (warns.length) level = "warn";
   }
   var open = !!openTiles[r.robot], st = robotState(l), nr = String(r.nr || "").padStart(2, "0");
@@ -773,6 +795,28 @@ function tile(r, now, common) {
     '<div class="sub" style="margin-top:8px">' + (KIOSK ? "statuspagina" :
       '<a href="http://10.0.' + Number(r.nr) + '.10:8080/" target="_blank">statuspagina</a>') + " (wifi TB-AP-" + nr + ")</div></div>";
 }
+// Which online robot uses which wifi channel: neighbours on the same channel
+// share its airtime (last year's lab: all robots on one network was a disaster)
+function renderChannels(on) {
+  var by = {};
+  on.forEach(function (r) {
+    var s = (r.data || {}).status || {};
+    if (!s.wifi_band) return;
+    var k = s.wifi_band + " kanaal " + s.wifi_channel;
+    (by[k] = by[k] || []).push(String(r.nr).padStart(2, "0"));
+  });
+  var keys = Object.keys(by).sort(function (a, b) { return parseFloat(a) - parseFloat(b) || parseInt(a.split(" kanaal ")[1]) - parseInt(b.split(" kanaal ")[1]); });
+  var box = document.getElementById("chanBox");
+  box.style.display = keys.length ? "" : "none";
+  box.innerHTML = "<b>Wifikanalen:</b> " + keys.map(function (k) {
+    // more robots on a channel than the plan puts there, or the 2.4 GHz fallback: yellow
+    var n = by[k].length, ch = parseInt(k.split(" kanaal ")[1]), planned = 0, plan = (lastJ || {}).wifi_plan || {};
+    Object.keys(plan).forEach(function (nr) { if (plan[nr]["5"] === ch) planned++; });
+    var c = k.indexOf("2.4") === 0 || n > planned ? "y" : "";
+    return '<span class="' + c + '" title="' + n + " robot(s) delen dit kanaal, gepland: " + planned + '">' +
+      esc(k) + ": " + by[k].join(", ") + "</span>";
+  }).join(" · ") + ' <span class="sub">(plan: monitor/wifi_kanalen.csv)</span>';
+}
 function refresh() {
   fetch("/api/robots").then(function (x) { return x.json(); }).then(function (j) {
     lastJ = j;
@@ -813,6 +857,7 @@ function render() {
   var rx = 0, tx = 0;
   on.forEach(function (r) { var s = (r.data || {}).status || {}; rx += s.net_rx_kbps || 0; tx += s.net_tx_kbps || 0; });
   document.getElementById("grid").innerHTML = rs.map(function (r) { return tile(r, j.now, common); }).join("");
+  renderChannels(on);
   var bad = document.querySelectorAll(".tile.bad").length, warn = document.querySelectorAll(".tile.warn").length;
   document.getElementById("summary").textContent = on.length + " van " + rs.length + " robots online" +
     (bad ? ", " + bad + " met een probleem" : "") + (warn ? ", " + warn + " met aandacht" : "") +
