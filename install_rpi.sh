@@ -58,7 +58,7 @@ else
 [Desktop Entry]
 Type=Application
 Name=TurtleBot Monitor
-Exec=$HERE/kiosk.sh http://localhost:$PORT
+Exec=$HERE/kiosk.sh http://localhost:$PORT/?kiosk
 X-GNOME-Autostart-enabled=true
 EOF
   chmod +x "$HERE/kiosk.sh"

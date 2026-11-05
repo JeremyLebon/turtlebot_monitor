@@ -368,7 +368,7 @@ class Handler(BaseHTTPRequestHandler):
                                                "control": self._may_control(),
                                                "view_only": VIEW_ONLY}),
                               "application/json")
-        if self.path in ("/", "/index.html"):
+        if self.path.split("?")[0] in ("/", "/index.html"):   # also "/?kiosk" (kiosk.sh)
             return self._send(200, PAGE, "text/html; charset=utf-8")
         self._send(404, "not found", "text/plain")
 
@@ -434,6 +434,9 @@ button:disabled, select:disabled { opacity:.4; cursor:default; }
 <p class="sub">Elke robot stuurt elke 5 s zijn status. Groen = alles in orde, geel = aandacht, rood = probleem, grijs = niets ontvangen.
 Statuspagina per robot: enkel bereikbaar als je laptop op de wifi van die robot zit (TB-AP-&lt;nr&gt;).</p>
 <script>
+// Kiosk screen on the monitor RPi (kiosk.sh opens ...?kiosk): no links, the RPi cannot
+// reach the robots behind their AP and a full-screen browser has no way back.
+var KIOSK = /[?&]kiosk\b/.test(location.search);
 function esc(t) { return String(t == null ? "" : t).replace(/[&<>"]/g, function (c) { return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
 function ago(s) { return s < 60 ? Math.round(s) + " s" : s < 3600 ? Math.round(s / 60) + " min" : Math.round(s / 3600) + " u"; }
 function batt(v) {   // 0 % = 11.0 V: there the OpenCR switches the motors off
@@ -611,7 +614,8 @@ function tile(r, now, common) {
       msgs.map(function (m) { return '<div class="alert">' + esc(m) + "</div>"; }).join("") +
       (warns.length ? '<div class="warnmsg" title="' + esc(tips.map(function (t) { return "- " + t; }).join("\n")) + '">' +
         esc(warns.join(", ")) + "</div>" : "") + controls(r) : "") +
-    '<div class="sub" style="margin-top:8px"><a href="http://10.0.' + Number(r.nr) + '.10:8080/" target="_blank">statuspagina</a> (wifi TB-AP-' + nr + ")</div></div>";
+    '<div class="sub" style="margin-top:8px">' + (KIOSK ? "statuspagina" :
+      '<a href="http://10.0.' + Number(r.nr) + '.10:8080/" target="_blank">statuspagina</a>') + " (wifi TB-AP-" + nr + ")</div></div>";
 }
 function refresh() {
   fetch("/api/robots").then(function (x) { return x.json(); }).then(function (j) {
