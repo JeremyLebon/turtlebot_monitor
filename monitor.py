@@ -505,7 +505,7 @@ h1 { font-size:1.2rem; margin:0; }
 .tile.off { opacity:.55; }
 .name { font-weight:700; font-size:1rem; display:flex; justify-content:space-between; }
 .kv { display:grid; grid-template-columns:auto 1fr; gap:2px 10px; margin-top:8px; font-size:.85rem; }
-.kv span:nth-child(odd) { color:var(--muted); }
+.kv > span:nth-child(odd) { color:var(--muted); }
 .chips { display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; }
 .chip { font-size:.72rem; padding:1px 8px; border-radius:999px; border:1px solid var(--border); color:var(--muted); }
 .chip.on { background:var(--accent); border-color:var(--accent); color:#0b1a2b; font-weight:600; }
@@ -525,7 +525,11 @@ button:disabled, select:disabled { opacity:.4; cursor:default; }
 .tile { min-width:0; }
 .head { display:flex; align-items:center; gap:6px; cursor:pointer; user-select:none; }
 .head b { font-size:1rem; }
-.head .sum { margin-left:auto; font-size:.82rem; text-align:right; }
+.head .sum { margin-left:auto; font-size:.82rem; text-align:right; display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+.hi { display:inline-flex; align-items:center; gap:3px; color:var(--muted); }
+.hi.g { color:var(--green); } .hi.y { color:var(--yellow); } .hi.r { color:var(--red); }
+button svg, .chip svg { vertical-align:-3px; margin-right:4px; }
+.chip svg { margin-right:3px; }
 .head input { margin:0; cursor:pointer; }
 .caret { color:var(--muted); width:1em; }
 .warnline { margin-top:6px; font-size:.8rem; color:var(--yellow); }
@@ -540,22 +544,22 @@ details.bar summary { cursor:pointer; }
 .chtab th { color:var(--muted); font-weight:400; }
 </style></head><body>
 <header><h1>TurtleBot Monitor</h1><span class="sub" id="summary">laden...</span>
-  <span style="margin-left:auto;display:flex;gap:6px"><button id="openAll">Alles open</button>
+  <span style="margin-left:auto;display:flex;gap:6px"><button id="openAll"></button>
   <button id="loginBtn" style="display:none">Docent aanmelden</button></span></header>
 <div class="bar" id="allBar">
   <b>Alle robots:</b>
-  <button class="stop" data-all="stop_all" title="Alle launches stoppen - motoren stil">STOP ALLES</button>
-  <button data-all="start:bringup">Bringup starten</button>
+  <button class="stop" data-all="stop_all" data-icon="stop" title="Alle launches stoppen - motoren stil">STOP ALLES</button>
+  <button data-all="start:bringup" data-icon="play">Bringup starten</button>
   <button id="updAll" title="Software bijwerken (git + Docker-image) voor de aangevinkte robots, in groepjes zodat internet en lessen niet vastlopen">Bijwerken</button>
   <select id="selPick" title="Robots aanvinken om bij te werken"><option value="">aanvinken...</option>
     <option value="all">alle die luisteren</option><option value="upd">met update beschikbaar</option><option value="none">geen</option></select>
   <select id="updPar" title="Hoeveel robots tegelijk"><option value="1">1 tegelijk</option><option value="2" selected>2 tegelijk</option><option value="3">3 tegelijk</option></select>
   <button id="updCancel" style="display:none" title="Wachtende robots niet meer bijwerken (lopende updates werken af)">Wachtrij stoppen</button>
-  <button data-all="shutdown" title="Alle robots uitschakelen (einde les)">Uitschakelen</button>
-  <button id="pinAll" title="Docenten-PIN voor Beheer op de statuspagina, voor alle robots die luisteren, en voor Docent aanmelden op deze monitor (enkel de hash gaat naar de robots)">Docenten-PIN</button>
+  <button data-all="shutdown" data-icon="power" title="Alle robots uitschakelen (einde les)">Uitschakelen</button>
+  <button id="pinAll" data-icon="beheer" title="Docenten-PIN voor Beheer op de statuspagina, voor alle robots die luisteren, en voor Docent aanmelden op deze monitor (enkel de hash gaat naar de robots)">Docenten-PIN</button>
   <span class="sub" id="ctrlInfo"></span>
   <span id="rpiPower" style="display:none;margin-left:auto">Monitor-RPi:
-    <button data-power="reboot">Herstarten</button> <button data-power="poweroff">Afsluiten</button></span>
+    <button data-power="reboot" data-icon="reboot">Herstarten</button> <button data-power="poweroff" data-icon="power">Afsluiten</button></span>
 </div>
 <div class="bar" id="updBox" style="display:none"></div>
 <div class="grid" id="grid"></div>
@@ -574,12 +578,51 @@ Statuspagina per robot: enkel bereikbaar als je laptop op de wifi van die robot 
 // Kiosk screen on the monitor RPi (kiosk.sh opens ...?kiosk): no links, the RPi cannot
 // reach the robots behind their AP and a full-screen browser has no way back.
 var KIOSK = /[?&]kiosk\b/.test(location.search);
+// Icons from the Fenix status page on the robots (common.js FENIX_ICONS), so
+// the monitor looks like the robot pages; bell is new.
+var FX = {
+  stop: '<path d="M8 2h8l6 6v8l-6 6H8l-6-6V8z"/><path d="M9 9h6v6H9z"/>',
+  play: '<path d="M7 4l13 8-13 8z" fill="currentColor"/>',
+  update: '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
+  power: '<path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>',
+  reboot: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
+  beheer: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  unlocked: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/>',
+  fit: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/>',
+  maps: '<path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z"/><path d="M9 4v14M15 6v14"/>',
+  nav: '<path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3z"/><path d="M9 3v15M15 6v15"/>',
+  gamepad: '<path d="M6 11h4M8 9v4M15 12h.01M18 10h.01"/><path d="M17.3 5H6.7a4 4 0 0 0-4 3.6L2 15a3 3 0 0 0 5.5 1.7L9 15h6l1.5 1.7A3 3 0 0 0 22 15l-.7-6.4A4 4 0 0 0 17.3 5z"/>',
+  camera: '<path d="M3 7h4l2-3h6l2 3h4v13H3z"/><circle cx="12" cy="13" r="4"/>',
+  lidar: '<circle cx="12" cy="12" r="2"/><path d="M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14M8 8a5 5 0 0 0 0 8M16 8a5 5 0 0 1 0 8"/>',
+};
+function fxIcon(name, size) {
+  return '<svg width="' + (size || 16) + '" height="' + (size || 16) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + FX[name] + "</svg>";
+}
+document.querySelectorAll("[data-icon]").forEach(function (el) { el.innerHTML = fxIcon(el.dataset.icon) + el.innerHTML; });
+// Header icons of a tile, drawn like the Fenix header: battery, wifi bars, Pi temperature
+function battIcon(pct) {
+  var w = pct == null ? 0 : Math.max(1, Math.round(17 * pct / 100));
+  return '<svg width="24" height="13" viewBox="0 0 26 14" aria-hidden="true"><rect x="1" y="1" width="21" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/>' +
+    '<rect x="22.5" y="4.5" width="2.5" height="5" rx="1" fill="currentColor"/><rect x="3" y="3" width="' + w + '" height="8" rx="1" fill="currentColor"/></svg>';
+}
+function wifiIcon(dbm) {
+  var bars = dbm == null ? 0 : dbm > -55 ? 4 : dbm > -65 ? 3 : dbm > -72 ? 2 : dbm > -80 ? 1 : 0;
+  return '<svg width="17" height="13" viewBox="0 0 18 14" aria-hidden="true">' + [0, 1, 2, 3].map(function (i) {
+    return '<rect x="' + (i * 4.6) + '" y="' + (10 - i * 3) + '" width="3.4" height="' + (4 + i * 3) + '" rx="1" fill="currentColor" opacity="' + (i < bars ? 1 : 0.25) + '"/>';
+  }).join("") + "</svg>";
+}
+function tempIcon() {
+  return '<svg width="11" height="16" viewBox="0 0 12 18" aria-hidden="true"><path d="M4 2.5a2 2 0 0 1 4 0v8.2a3.6 3.6 0 1 1-4 0z" fill="none" stroke="currentColor" stroke-width="1.5"/>' +
+    '<circle cx="6" cy="13.6" r="2" fill="currentColor"/><rect x="5.2" y="8" width="1.6" height="5" fill="currentColor"/></svg>';
+}
 function esc(t) { return String(t == null ? "" : t).replace(/[&<>"]/g, function (c) { return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
 function ago(s) { return s < 60 ? Math.round(s) + " s" : s < 3600 ? Math.round(s / 60) + " min" : Math.round(s / 3600) + " u"; }
 function batt(v) {   // 0 % = 11.0 V: there the OpenCR switches the motors off
   if (v == null) return ["--", ""];
   var p = Math.max(0, Math.min(100, (v - 11.0) / 1.3 * 100));
-  return [v.toFixed(1) + " V (" + Math.round(p) + " %)", v < 11.2 ? "r" : v < 11.4 ? "y" : "g", Math.round(p) + " %"];
+  return [v.toFixed(1) + " V (" + Math.round(p) + " %)", v < 11.2 ? "r" : v < 11.4 ? "y" : "g", Math.round(p) + " %", p];
 }
 var CMD_TEXT = { stop_all: "stop alles", beep: "piep", update: "bijwerken", reboot: "herstarten", shutdown: "uitschakelen",
                  map_upload: "kaart naar bibliotheek", map_download: "kaart uit bibliotheek", set_pin: "PIN instellen" };
@@ -612,6 +655,15 @@ function post(url, body) {
   return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) })
     .then(function (x) { if (!x.ok) return x.json().then(function (j) { alert(j.error || "geweigerd"); }); refresh(); });
 }
+// Kiosk screen on the RPi: whoever stands in front of it after the teacher must
+// not keep the buttons - log out after KIOSK_IDLE_S without mouse/touch/keys.
+var KIOSK_IDLE_S = 600, lastActivity = Date.now();
+["pointerdown", "keydown", "wheel"].forEach(function (ev) {
+  document.addEventListener(ev, function () { lastActivity = Date.now(); }, true);
+});
+setInterval(function () {
+  if (KIOSK && lastJ && lastJ.session && Date.now() - lastActivity > KIOSK_IDLE_S * 1000) post("/api/logout");
+}, 10000);
 document.getElementById("loginBtn").addEventListener("click", function () {
   if (this.dataset.session) { post("/api/logout"); return; }
   var pin = prompt("Docenten-PIN:");
@@ -711,8 +763,8 @@ function controls(r) {
   }).join("") + '<option value="update">bijwerken</option><option value="reboot">herstarten</option><option value="shutdown">uitschakelen</option>' + mapOpts;
   var res = r.result ? '<div class="res">' + esc(cmdText(r.result.cmd)) + ": " +
     (r.result.ok === null ? "verstuurd..." : (r.result.ok ? '<span class="g">OK</span> ' : '<span class="r">mislukt</span> ') + esc(r.result.message)) + "</div>" : "";
-  return '<div class="btns"><button class="stop" data-cmd="stop_all" data-robot="' + esc(r.robot) + '"' + dis + ">Stop</button>" +
-    '<button data-cmd="beep" data-robot="' + esc(r.robot) + '"' + dis + ' title="Laat de robot piepen, om hem terug te vinden">Piep</button>' +
+  return '<div class="btns"><button class="stop" data-cmd="stop_all" data-robot="' + esc(r.robot) + '"' + dis + ">" + fxIcon("stop", 14) + "Stop</button>" +
+    '<button data-cmd="beep" data-robot="' + esc(r.robot) + '"' + dis + ' title="Laat de robot piepen, om hem terug te vinden">' + fxIcon("bell", 14) + "Piep</button>" +
     '<select data-robot="' + esc(r.robot) + '"' + dis + '><option value="">meer...</option>' + opts + "</select></div>" + res;
 }
 // Robot state from the launches (the active control source itself isn't in
@@ -757,11 +809,15 @@ function cpuLoad(s) {
 // Traffic on the robot's wifi (wlan0), in kbit/s from system_info_node: camera
 // streams, Lichtblick and rosbridge add up; a busy link makes the pages slow.
 function rate(k) { return k < 1000 ? Math.round(k) + " kbit/s" : (k / 1000).toFixed(1).replace(".", ",") + " Mbit/s"; }
+// Average over the last net_avg_s seconds when the robot sends it (image 1.5.0+), else the 2 s value
+function netRx(s) { return s.net_rx_kbps_avg != null ? s.net_rx_kbps_avg : s.net_rx_kbps; }
+function netTx(s) { return s.net_tx_kbps_avg != null ? s.net_tx_kbps_avg : s.net_tx_kbps; }
 function wifiLoad(s) {
-  if (s.net_rx_kbps == null || s.net_tx_kbps == null) return "<span>--</span>";
-  var tot = s.net_rx_kbps + s.net_tx_kbps, c = tot > 30000 ? "r" : tot > 15000 ? "y" : "";
-  return '<span class="' + c + '" title="naar de robot / van de robot (wlan0)">↓ ' + rate(s.net_rx_kbps) +
-    " · ↑ " + rate(s.net_tx_kbps) + "</span>";
+  var rx = netRx(s), tx = netTx(s);
+  if (rx == null || tx == null) return "<span>--</span>";
+  var tot = rx + tx, c = tot > 30000 ? "r" : tot > 15000 ? "y" : "";
+  return '<span class="' + c + '" title="naar de robot / van de robot (wlan0)' +
+    (s.net_rx_kbps_avg != null ? ", gemiddelde over " + s.net_avg_s + " s" : ", momentopname") + '">↓ ' + rate(rx) + " · ↑ " + rate(tx) + "</span>";
 }
 // The robot itself compares its image (Docker Hub) and setup repo (GitHub) with
 // the newest ones, when it has internet; null = not checked (yet).
@@ -804,8 +860,13 @@ function tile(r, now, common) {
     (control ? '<input type="checkbox" data-sel="' + esc(r.robot) + '"' + (selected[r.robot] ? " checked" : "") +
       (r.listening ? "" : " disabled") + ' title="Aanvinken om bij te werken">' : "") +
     '<span class="caret">' + (open ? "▾" : "▸") + "</span><b>" + esc(r.robot) + '</b><span class="sum">' +
-    (online ? '<span class="' + st[1] + '">' + st[0] + '</span> · <span class="' + b[1] + '">' + b[2] + "</span>" +
-      (updateAvailable(s.updates) ? ' · <span class="y">update</span>' : "")
+    (online ? '<span class="' + st[1] + '">' + st[0] + "</span>" +
+      '<span class="hi ' + b[1] + '" title="Batterij ' + esc(b[0]) + '">' + battIcon(b[3]) + b[2] + "</span>" +
+      '<span class="hi ' + (s.wifi_signal_dbm == null ? "" : s.wifi_signal_dbm > -60 ? "g" : s.wifi_signal_dbm >= -70 ? "y" : "r") +
+        '" title="Wifi ' + (s.wifi_signal_dbm != null ? s.wifi_signal_dbm + " dBm" : "--") + '">' + wifiIcon(s.wifi_signal_dbm) + "</span>" +
+      '<span class="hi ' + (s.cpu_temp_c > 80 ? "r" : s.cpu_temp_c > 70 ? "y" : "g") + '" title="Raspberry Pi ' +
+        (s.cpu_temp_c != null ? Math.round(s.cpu_temp_c) + " °C" : "--") + '">' + tempIcon() + "</span>" +
+      (updateAvailable(s.updates) ? '<span class="hi y" title="Update beschikbaar">' + fxIcon("update", 15) + "</span>" : "")
       : r.seen ? "offline sinds " + ago(age) : "nooit gezien") + "</span></div>";
   var alerts = msgs.map(function (m) { return '<div class="alert">' + esc(m) + "</div>"; }).join("");
   var tip = esc(tips.map(function (t) { return "- " + t; }).join("\n"));
@@ -816,7 +877,8 @@ function tile(r, now, common) {
   var tc = s.cpu_temp_c > 80 ? "r" : s.cpu_temp_c > 70 ? "y" : "";
   var chips = ["bringup", "slam", "navigation", "joystick", "camera"].map(function (k) {
     var names = { bringup: "bringup", slam: "SLAM", navigation: "Navigatie", joystick: "joystick", camera: "camera" };
-    return '<span class="chip' + (l[k] ? " on" : "") + '">' + names[k] + "</span>";
+    var icons = { bringup: "play", slam: "maps", navigation: "nav", joystick: "gamepad", camera: "camera" };
+    return '<span class="chip' + (l[k] ? " on" : "") + '">' + fxIcon(icons[k], 12) + names[k] + "</span>";
   }).join("");
   return '<div class="tile ' + level + (online ? "" : " off") + '">' + head +
     (online ? '<div class="kv">' +
@@ -927,17 +989,17 @@ function render() {
   if (j.update_queue) renderUpdate(j.update_queue);
   var nSel = selectedNames().length, updBtn = document.getElementById("updAll");
   updBtn.disabled = !control || busy || !nSel;
-  updBtn.textContent = nSel ? nSel + " robot(s) bijwerken" : "Bijwerken (vink robots aan)";
+  updBtn.innerHTML = fxIcon("update") + (nSel ? nSel + " robot(s) bijwerken" : "Bijwerken (vink robots aan)");
   document.getElementById("selPick").disabled = !control;
   document.getElementById("rpiPower").style.display = control && j.rpi_power ? "" : "none";
   document.querySelectorAll("[data-all]").forEach(function (b) { b.disabled = !control; });
   var listening = rs.filter(function (r) { return r.listening; }).length;
   document.getElementById("allBar").style.display = j.view_only ? "none" : "";
   var lb = document.getElementById("loginBtn");
-  lb.style.display = KIOSK || j.view_only || (control && !j.session) ? "none" : "";
-  lb.textContent = j.session ? "Afmelden" : "Docent aanmelden";
+  lb.style.display = j.view_only || (control && !j.session) ? "none" : "";
+  lb.innerHTML = fxIcon(j.session ? "unlocked" : "beheer") + (j.session ? "Afmelden" : "Docent aanmelden");
   lb.dataset.session = j.session ? "1" : "";
-  document.getElementById("openAll").textContent = rs.some(function (r) { return !openTiles[r.robot]; }) ? "Alles open" : "Alles dicht";
+  document.getElementById("openAll").innerHTML = fxIcon("fit") + (rs.some(function (r) { return !openTiles[r.robot]; }) ? "Alles open" : "Alles dicht");
   document.getElementById("ctrlInfo").textContent = !control ? (j.pin_set ? "knoppen na Docent aanmelden"
       : "knoppen: stel eerst een docenten-PIN in op de monitor zelf")
     : listening + " robot(s) luisteren naar opdrachten";
@@ -951,7 +1013,7 @@ function render() {
   if (Object.keys(count).length < 2) common = "";
   // all robots together: each has its own AP, but the APs share the 2.4 GHz band in one room
   var rx = 0, tx = 0;
-  on.forEach(function (r) { var s = (r.data || {}).status || {}; rx += s.net_rx_kbps || 0; tx += s.net_tx_kbps || 0; });
+  on.forEach(function (r) { var s = (r.data || {}).status || {}; rx += netRx(s) || 0; tx += netTx(s) || 0; });
   document.getElementById("grid").innerHTML = rs.map(function (r) { return tile(r, j.now, common); }).join("");
   renderChannels(on);
   var bad = document.querySelectorAll(".tile.bad").length, warn = document.querySelectorAll(".tile.warn").length;
