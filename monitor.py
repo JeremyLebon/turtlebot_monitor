@@ -683,7 +683,10 @@ button svg, .chip svg { vertical-align:-3px; margin-right:4px; }
 .caret { color:var(--muted); width:1em; }
 .warnline { margin-top:6px; font-size:.8rem; color:var(--yellow); }
 .info { margin-top:8px; font-size:.8rem; color:var(--muted); }
-.btns select { flex:1 1 6em; min-width:0; max-width:100%; }
+.btns select { flex:1 1 10em; min-width:0; max-width:100%; }
+.btns button.on { background:var(--accent); border-color:var(--accent); color:#0b1a2b; font-weight:600; }
+.btns button.on:disabled { opacity:.8; }   /* without login: still shows what runs */
+.btns button.ico svg { margin-right:0; }
 details.bar { display:block; }
 details.bar summary { cursor:pointer; }
 .spec { width:100%; max-width:760px; display:block; margin-top:8px; }
@@ -751,6 +754,7 @@ var FX = {
   nav: '<path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3z"/><path d="M9 3v15M15 6v15"/>',
   gamepad: '<path d="M6 11h4M8 9v4M15 12h.01M18 10h.01"/><path d="M17.3 5H6.7a4 4 0 0 0-4 3.6L2 15a3 3 0 0 0 5.5 1.7L9 15h6l1.5 1.7A3 3 0 0 0 22 15l-.7-6.4A4 4 0 0 0 17.3 5z"/>',
   camera: '<path d="M3 7h4l2-3h6l2 3h4v13H3z"/><circle cx="12" cy="13" r="4"/>',
+  robot: '<rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 7V4M9 12h.01M15 12h.01M9 16h6"/>',
   wifi: '<path d="M2 9a15 15 0 0 1 20 0M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1" fill="currentColor"/>',
   lidar: '<circle cx="12" cy="12" r="2"/><path d="M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14M8 8a5 5 0 0 0 0 8M16 8a5 5 0 0 1 0 8"/>',
 };
@@ -910,20 +914,31 @@ document.addEventListener("change", function (e) {
     e.target.value = "";
   }
 });
+// Tile buttons: launches as icon toggles (filled = running, click = stop),
+// then the robot actions; only the map list (variable) stays a dropdown.
+var LAUNCH_BTNS = [["bringup", "robot", "Bringup"], ["slam", "lidar", "SLAM"], ["navigation", "nav", "Navigatie"],
+                   ["joystick", "gamepad", "Joystick"], ["camera", "camera", "Camera"]];
 function controls(r) {
-  var dis = control && r.listening ? "" : " disabled";
+  var dis = control && r.listening ? "" : " disabled", rb = ' data-robot="' + esc(r.robot) + '"' + dis;
   var l = (r.data || {}).launch || {};
-  var mapOpts = (l.maps || []).map(function (m) {
-    return '<option value="map_upload|' + esc(m) + '">kaart ' + esc(m) + " naar bibliotheek</option>";
+  function btn(cmd, icon, label, title, cls) {
+    return '<button data-cmd="' + cmd + '"' + rb + (cls ? ' class="' + cls + '"' : "") + ' title="' + esc(title) + '">' +
+      fxIcon(icon, 14) + label + "</button>";
+  }
+  var launches = LAUNCH_BTNS.map(function (b) {
+    return btn((l[b[0]] ? "stop:" : "start:") + b[0], b[1], b[2], (l[b[0]] ? "Stop " : "Start ") + b[0], l[b[0]] ? "on" : "");
   }).join("");
-  var opts = ["bringup", "slam", "navigation", "joystick", "camera"].map(function (k) {
-    return '<option value="' + (l[k] ? "stop:" : "start:") + k + '">' + (l[k] ? "stop " : "start ") + k + "</option>";
-  }).join("") + '<option value="update">bijwerken</option><option value="reboot">herstarten</option><option value="shutdown">uitschakelen</option>' + mapOpts;
+  var maps = (l.maps || []).length ? '<select data-robot="' + esc(r.robot) + '"' + dis + ' title="Kaart van deze robot naar de kaartenbibliotheek">' +
+    '<option value="">kaart naar bibliotheek...</option>' + l.maps.map(function (m) {
+      return '<option value="map_upload|' + esc(m) + '">' + esc(m) + "</option>"; }).join("") + "</select>" : "";
   var res = r.result ? '<div class="res">' + esc(cmdText(r.result.cmd)) + ": " +
     (r.result.ok === null ? "verstuurd..." : (r.result.ok ? '<span class="g">OK</span> ' : '<span class="r">mislukt</span> ') + esc(r.result.message)) + "</div>" : "";
-  return '<div class="btns"><button class="stop" data-cmd="stop_all" data-robot="' + esc(r.robot) + '"' + dis + ">" + fxIcon("stop", 14) + "Stop</button>" +
-    '<button data-cmd="beep" data-robot="' + esc(r.robot) + '"' + dis + ' title="Laat de robot piepen, om hem terug te vinden">' + fxIcon("bell", 14) + "Piep</button>" +
-    '<select data-robot="' + esc(r.robot) + '"' + dis + '><option value="">meer...</option>' + opts + "</select></div>" + res;
+  return '<div class="btns">' + launches + "</div>" +
+    '<div class="btns">' + btn("stop_all", "stop", "Stop", "Alle launches stoppen - motoren stil", "stop") +
+    btn("beep", "bell", "", "Piep: laat de robot piepen, om hem terug te vinden", "ico") +
+    btn("update", "update", "Bijwerken", "Software bijwerken (nieuw image + setup)") +
+    btn("reboot", "reboot", "", "Robot herstarten", "ico") + btn("shutdown", "power", "", "Robot uitschakelen", "ico") + "</div>" +
+    (maps ? '<div class="btns">' + maps + "</div>" : "") + res;
 }
 // Robot state from the launches (the active control source itself isn't in
 // the monitor payload): what the class is doing at a glance
@@ -1040,11 +1055,6 @@ function tile(r, now, common) {
       (warns.length ? '<div class="warnline" title="' + tip + '">' + esc(warns.join(", ")) + "</div>" : "") + "</div>";
   var temp = s.cpu_temp_c != null ? Math.round(s.cpu_temp_c) + " °C" : "--";
   var tc = s.cpu_temp_c > 80 ? "r" : s.cpu_temp_c > 70 ? "y" : "";
-  var chips = ["bringup", "slam", "navigation", "joystick", "camera"].map(function (k) {
-    var names = { bringup: "bringup", slam: "SLAM", navigation: "Navigatie", joystick: "joystick", camera: "camera" };
-    var icons = { bringup: "play", slam: "maps", navigation: "nav", joystick: "gamepad", camera: "camera" };
-    return '<span class="chip' + (l[k] ? " on" : "") + '">' + fxIcon(icons[k], 12) + names[k] + "</span>";
-  }).join("");
   return '<div class="tile ' + level + (online ? "" : " off") + '">' + head +
     (online ? '<div class="kv">' +
       "<span>Toestand</span><span class=\"" + st[1] + "\">" + st[0] + "</span>" +
@@ -1060,7 +1070,7 @@ function tile(r, now, common) {
       "<span>Software</span><span>" + esc(s.image_version || "--") + softwareState(s.updates) +
         (d.setup_commit ? '<br><span class="sub">setup ' + esc(d.setup_commit) + "</span>" : "") + "</span>" +
       "<span>Uptime</span><span>" + (s.uptime_seconds ? ago(s.uptime_seconds) : "--") + "</span>" +
-      "</div><div class=\"chips\">" + chips + "</div>" + alerts +
+      "</div>" + alerts +
       (warns.length ? '<div class="warnmsg" title="' + tip + '">' + esc(warns.join(", ")) + "</div>" : "") +
       (chg.length ? '<div class="info" title="' + esc(chg.map(function (c) { return "- " + c.text; }).join("\n")) + '">' +
         chg.length + " aanpassing(en) t.o.v. de standaard (details: muis erop)</div>" : "") + controls(r) : "") +
