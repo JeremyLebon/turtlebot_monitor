@@ -656,6 +656,15 @@ function health(s, msgs, warns, tips) {
 }
 // The robot itself compares its image (Docker Hub) and setup repo (GitHub) with
 // the newest ones, when it has internet; null = not checked (yet).
+// Traffic on the robot's wifi (wlan0), in kbit/s from system_info_node: camera
+// streams, Lichtblick and rosbridge add up; a busy link makes the pages slow.
+function rate(k) { return k < 1000 ? Math.round(k) + " kbit/s" : (k / 1000).toFixed(1).replace(".", ",") + " Mbit/s"; }
+function wifiLoad(s) {
+  if (s.net_rx_kbps == null || s.net_tx_kbps == null) return "<span>--</span>";
+  var tot = s.net_rx_kbps + s.net_tx_kbps, c = tot > 30000 ? "r" : tot > 15000 ? "y" : "";
+  return '<span class="' + c + '" title="naar de robot / van de robot (wlan0)">↓ ' + rate(s.net_rx_kbps) +
+    " · ↑ " + rate(s.net_tx_kbps) + "</span>";
+}
 function updateAvailable(u) { return !!(u && (u.image_behind || u.setup_behind)); }
 function softwareState(u) {
   if (updateAvailable(u))
@@ -700,6 +709,7 @@ function tile(r, now, common) {
       "<span>Batterij</span><span class=\"" + b[1] + "\">" + b[0] + "</span>" +
       "<span>CPU</span><span>" + (s.cpu_load_1min != null ? s.cpu_load_1min : "--") + ' load, <span class="' + tc + '">' + temp + "</span></span>" +
       "<span>Wifi</span><span>" + (s.wifi_signal_dbm != null ? s.wifi_signal_dbm + " dBm" : "--") + "</span>" +
+      "<span>Wifi-verkeer</span>" + wifiLoad(s) +
       "<span>Kaart</span><span>" + esc(l.map_running || "--") + "</span>" +
       "<span>USB / lidar</span><span>" + (l.usb_power === "off" ? "uit (spaarstand)" : l.usb_power === "on" ? "aan" : "--") +
         (s.lidar ? ", " + s.lidar.hours.toFixed(0) + " draaiuren" : "") + "</span>" +
