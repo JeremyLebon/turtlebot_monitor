@@ -465,7 +465,7 @@ body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 system-u
 header { display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
 h1 { font-size:1.2rem; margin:0; }
 .sub { color:var(--muted); font-size:.82rem; }
-.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px; align-items:start; }
 .tile { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:12px; border-left:5px solid var(--muted); }
 .tile.ok { border-left-color:var(--green); } .tile.warn { border-left-color:var(--yellow); } .tile.bad { border-left-color:var(--red); }
 .tile.off { opacity:.55; }
@@ -488,14 +488,26 @@ button.stop { background:var(--red); border-color:var(--red); color:#2a0d0d; fon
 button:disabled, select:disabled { opacity:.4; cursor:default; }
 .btns { display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; }
 .res { margin-top:6px; font-size:.78rem; color:var(--muted); }
+.tile { min-width:0; }
+.head { display:flex; align-items:center; gap:6px; cursor:pointer; user-select:none; }
+.head b { font-size:1rem; }
+.head .sum { margin-left:auto; font-size:.82rem; text-align:right; }
+.head input { margin:0; cursor:pointer; }
+.caret { color:var(--muted); width:1em; }
+.warnline { margin-top:6px; font-size:.8rem; color:var(--yellow); }
+.info { margin-top:8px; font-size:.8rem; color:var(--muted); }
+.btns select { flex:1 1 6em; min-width:0; max-width:100%; }
 </style></head><body>
 <header><h1>TurtleBot Monitor</h1><span class="sub" id="summary">laden...</span>
-  <button id="loginBtn" style="display:none;margin-left:auto">Docent aanmelden</button></header>
+  <span style="margin-left:auto;display:flex;gap:6px"><button id="openAll">Alles open</button>
+  <button id="loginBtn" style="display:none">Docent aanmelden</button></span></header>
 <div class="bar" id="allBar">
   <b>Alle robots:</b>
   <button class="stop" data-all="stop_all" title="Alle launches stoppen - motoren stil">STOP ALLES</button>
   <button data-all="start:bringup">Bringup starten</button>
-  <button id="updAll" title="Software bijwerken (git + Docker-image), in groepjes zodat internet en lessen niet vastlopen">Alles bijwerken</button>
+  <button id="updAll" title="Software bijwerken (git + Docker-image) voor de aangevinkte robots, in groepjes zodat internet en lessen niet vastlopen">Bijwerken</button>
+  <select id="selPick" title="Robots aanvinken om bij te werken"><option value="">aanvinken...</option>
+    <option value="all">alle die luisteren</option><option value="upd">met update beschikbaar</option><option value="none">geen</option></select>
   <select id="updPar" title="Hoeveel robots tegelijk"><option value="1">1 tegelijk</option><option value="2" selected>2 tegelijk</option><option value="3">3 tegelijk</option></select>
   <button id="updCancel" style="display:none" title="Wachtende robots niet meer bijwerken (lopende updates werken af)">Wachtrij stoppen</button>
   <button data-all="shutdown" title="Alle robots uitschakelen (einde les)">Uitschakelen</button>
@@ -523,7 +535,7 @@ function ago(s) { return s < 60 ? Math.round(s) + " s" : s < 3600 ? Math.round(s
 function batt(v) {   // 0 % = 11.0 V: there the OpenCR switches the motors off
   if (v == null) return ["--", ""];
   var p = Math.max(0, Math.min(100, (v - 11.0) / 1.3 * 100));
-  return [v.toFixed(1) + " V (" + Math.round(p) + " %)", v < 11.2 ? "r" : v < 11.4 ? "y" : "g"];
+  return [v.toFixed(1) + " V (" + Math.round(p) + " %)", v < 11.2 ? "r" : v < 11.4 ? "y" : "g", Math.round(p) + " %"];
 }
 var CMD_TEXT = { stop_all: "stop alles", beep: "piep", update: "bijwerken", reboot: "herstarten", shutdown: "uitschakelen",
                  map_upload: "kaart naar bibliotheek", map_download: "kaart uit bibliotheek", set_pin: "PIN instellen" };
@@ -561,9 +573,12 @@ document.getElementById("loginBtn").addEventListener("click", function () {
   var pin = prompt("Docenten-PIN:");
   if (pin) post("/api/login", { pin: pin });
 });
+function selectedNames() {
+  return lastRobots.filter(function (r) { return r.listening && selected[r.robot]; }).map(function (r) { return r.robot; });
+}
 document.getElementById("updAll").addEventListener("click", function () {
-  var names = lastRobots.filter(function (r) { return r.listening; }).map(function (r) { return r.robot; });
-  if (!names.length) { alert("Geen enkele robot luistert naar de monitor."); return; }
+  var names = selectedNames();
+  if (!names.length) { alert("Vink eerst de robots aan die bijgewerkt moeten worden."); return; }
   var par = document.getElementById("updPar").value;
   if (!confirm("Software bijwerken voor " + names.length + " robots, " + par + " tegelijk?\n" +
                "Bij een nieuwe image herstart de container: lopende launches stoppen.")) return;
@@ -579,6 +594,21 @@ document.getElementById("pinAll").addEventListener("click", function () {
   post("/api/set_pin", { pin: pin, robots: names });
 });
 document.getElementById("updCancel").addEventListener("click", function () { post("/api/update_all/cancel"); });
+document.getElementById("selPick").addEventListener("change", function (e) {
+  var v = e.target.value;
+  e.target.value = "";
+  selected = {};
+  lastRobots.forEach(function (r) {
+    if (r.listening && (v === "all" || (v === "upd" && updateAvailable(((r.data || {}).status || {}).updates))))
+      selected[r.robot] = true;
+  });
+  render();
+});
+document.getElementById("openAll").addEventListener("click", function () {
+  var anyClosed = lastRobots.some(function (r) { return !openTiles[r.robot]; });
+  lastRobots.forEach(function (r) { openTiles[r.robot] = anyClosed; });
+  saveOpen(); render();
+});
 function renderUpdate(q) {
   var box = document.getElementById("updBox");
   var done = Object.keys(q.done), busy = q.running.length + q.waiting.length;
@@ -596,8 +626,14 @@ function renderUpdate(q) {
 document.addEventListener("click", function (e) {
   var b = e.target.closest("[data-cmd]");
   if (b) send(b.dataset.cmd, [b.dataset.robot]);
+  var h = e.target.closest("[data-toggle]");
+  if (h && !e.target.matches("input")) {
+    openTiles[h.dataset.toggle] = !openTiles[h.dataset.toggle];
+    saveOpen(); render();
+  }
 });
 document.addEventListener("change", function (e) {
+  if (e.target.matches("input[data-sel]")) { selected[e.target.dataset.sel] = e.target.checked; render(); }
   if (e.target.matches("select[data-robot]") && e.target.value) {
     var v = e.target.value.split("|");
     send(v[0], [e.target.dataset.robot], v[1]);
@@ -654,8 +690,6 @@ function health(s, msgs, warns, tips) {
     errs.forEach(function (e) { tips.push(e.level + " " + e.node + ": " + e.msg); });
   }
 }
-// The robot itself compares its image (Docker Hub) and setup repo (GitHub) with
-// the newest ones, when it has internet; null = not checked (yet).
 // Traffic on the robot's wifi (wlan0), in kbit/s from system_info_node: camera
 // streams, Lichtblick and rosbridge add up; a busy link makes the pages slow.
 function rate(k) { return k < 1000 ? Math.round(k) + " kbit/s" : (k / 1000).toFixed(1).replace(".", ",") + " Mbit/s"; }
@@ -665,6 +699,8 @@ function wifiLoad(s) {
   return '<span class="' + c + '" title="naar de robot / van de robot (wlan0)">↓ ' + rate(s.net_rx_kbps) +
     " · ↑ " + rate(s.net_tx_kbps) + "</span>";
 }
+// The robot itself compares its image (Docker Hub) and setup repo (GitHub) with
+// the newest ones, when it has internet; null = not checked (yet).
 function updateAvailable(u) { return !!(u && (u.image_behind || u.setup_behind)); }
 function softwareState(u) {
   if (updateAvailable(u))
@@ -673,12 +709,18 @@ function softwareState(u) {
   if (u && u.image_behind === false && u.setup_behind !== true) return ' <span class="g">nieuwste</span>';
   return u && u.error ? '<br><span class="sub" title="' + esc(u.error) + '">niet nagekeken</span>' : "";
 }
+// Per robot: details open (remembered in this browser) / ticked for "Bijwerken"
+var openTiles = {}, selected = {}, lastJ = null;
+try { openTiles = JSON.parse(localStorage.getItem("tbmonOpen") || "{}"); } catch (e) {}
+function saveOpen() { try { localStorage.setItem("tbmonOpen", JSON.stringify(openTiles)); } catch (e) {} }
 function tile(r, now, common) {
   var d = r.data || {}, s = d.status || {}, l = d.launch || {};
   var age = r.seen ? now - r.seen : null, online = age != null && age < 20;
   var level = "ok", msgs = [], warns = [], tips = [];
   if (!online) level = "off";
   var b = batt(online ? d.battery_v : null);
+  // changes vs the standard settings: information, not a warning - the robot works
+  var chg = online ? l.changes || [] : [];
   if (online) {
     if (d.battery_v != null && d.battery_v < 11.0) msgs.push("Batterij leeg - motoren uitgeschakeld door de OpenCR");
     if (l.bringup && l.robot_node === false) msgs.push("OpenCR antwoordt niet (batterij? USB?)");
@@ -686,26 +728,33 @@ function tile(r, now, common) {
     if (s.throttled & 1) msgs.push("Onderspanning van de Pi (voeding/batterij)");
     if (b[1] === "y") warns.push("batterij bijna leeg");
     if (s.wifi_signal_dbm != null && s.wifi_signal_dbm < -72) warns.push("zwakke wifi");
-    var chg = l.changes || [];
-    if (chg.length) warns.push(chg.length + " aanpassing(en) t.o.v. de standaard");
-    chg.forEach(function (c) { tips.push(c.text); });
     health(s, msgs, warns, tips);
     var v = (s.image_version || "").split(" ")[0];
     if (common && v && v !== common) warns.push("andere versie dan de rest (" + common + ")");
     if (msgs.length) level = "bad"; else if (warns.length) level = "warn";
   }
+  var open = !!openTiles[r.robot], st = robotState(l), nr = String(r.nr || "").padStart(2, "0");
+  var head = '<div class="head" data-toggle="' + esc(r.robot) + '" title="Klik voor details">' +
+    (control ? '<input type="checkbox" data-sel="' + esc(r.robot) + '"' + (selected[r.robot] ? " checked" : "") +
+      (r.listening ? "" : " disabled") + ' title="Aanvinken om bij te werken">' : "") +
+    '<span class="caret">' + (open ? "▾" : "▸") + "</span><b>" + esc(r.robot) + '</b><span class="sum">' +
+    (online ? '<span class="' + st[1] + '">' + st[0] + '</span> · <span class="' + b[1] + '">' + b[2] + "</span>" +
+      (updateAvailable(s.updates) ? ' · <span class="y">update</span>' : "")
+      : r.seen ? "offline sinds " + ago(age) : "nooit gezien") + "</span></div>";
+  var alerts = msgs.map(function (m) { return '<div class="alert">' + esc(m) + "</div>"; }).join("");
+  var tip = esc(tips.map(function (t) { return "- " + t; }).join("\n"));
+  if (!open)
+    return '<div class="tile ' + level + (online ? "" : " off") + '">' + head + alerts +
+      (warns.length ? '<div class="warnline" title="' + tip + '">' + esc(warns.join(", ")) + "</div>" : "") + "</div>";
   var temp = s.cpu_temp_c != null ? Math.round(s.cpu_temp_c) + " °C" : "--";
   var tc = s.cpu_temp_c > 80 ? "r" : s.cpu_temp_c > 70 ? "y" : "";
   var chips = ["bringup", "slam", "navigation", "joystick", "camera"].map(function (k) {
     var names = { bringup: "bringup", slam: "SLAM", navigation: "Navigatie", joystick: "joystick", camera: "camera" };
     return '<span class="chip' + (l[k] ? " on" : "") + '">' + names[k] + "</span>";
   }).join("");
-  var nr = String(r.nr || "").padStart(2, "0");
-  return '<div class="tile ' + level + (online ? "" : " off") + '">' +
-    '<div class="name"><span>' + esc(r.robot) + '</span><span class="sub">' +
-      (online ? '<span class="g">online</span>' : r.seen ? "offline sinds " + ago(age) : "nooit gezien") + "</span></div>" +
+  return '<div class="tile ' + level + (online ? "" : " off") + '">' + head +
     (online ? '<div class="kv">' +
-      "<span>Toestand</span><span class=\"" + robotState(l)[1] + "\">" + robotState(l)[0] + "</span>" +
+      "<span>Toestand</span><span class=\"" + st[1] + "\">" + st[0] + "</span>" +
       "<span>Batterij</span><span class=\"" + b[1] + "\">" + b[0] + "</span>" +
       "<span>CPU</span><span>" + (s.cpu_load_1min != null ? s.cpu_load_1min : "--") + ' load, <span class="' + tc + '">' + temp + "</span></span>" +
       "<span>Wifi</span><span>" + (s.wifi_signal_dbm != null ? s.wifi_signal_dbm + " dBm" : "--") + "</span>" +
@@ -716,43 +765,58 @@ function tile(r, now, common) {
       "<span>Software</span><span>" + esc(s.image_version || "--") + softwareState(s.updates) +
         (d.setup_commit ? '<br><span class="sub">setup ' + esc(d.setup_commit) + "</span>" : "") + "</span>" +
       "<span>Uptime</span><span>" + (s.uptime_seconds ? ago(s.uptime_seconds) : "--") + "</span>" +
-      "</div><div class=\"chips\">" + chips + "</div>" +
-      msgs.map(function (m) { return '<div class="alert">' + esc(m) + "</div>"; }).join("") +
-      (warns.length ? '<div class="warnmsg" title="' + esc(tips.map(function (t) { return "- " + t; }).join("\n")) + '">' +
-        esc(warns.join(", ")) + "</div>" : "") + controls(r) : "") +
+      "</div><div class=\"chips\">" + chips + "</div>" + alerts +
+      (warns.length ? '<div class="warnmsg" title="' + tip + '">' + esc(warns.join(", ")) + "</div>" : "") +
+      (chg.length ? '<div class="info" title="' + esc(chg.map(function (c) { return "- " + c.text; }).join("\n")) + '">' +
+        chg.length + " aanpassing(en) t.o.v. de standaard (details: muis erop)</div>" : "") + controls(r) : "") +
     '<div class="sub" style="margin-top:8px">' + (KIOSK ? "statuspagina" :
       '<a href="http://10.0.' + Number(r.nr) + '.10:8080/" target="_blank">statuspagina</a>') + " (wifi TB-AP-" + nr + ")</div></div>";
 }
 function refresh() {
   fetch("/api/robots").then(function (x) { return x.json(); }).then(function (j) {
-    var rs = j.robots.slice().sort(function (a, b) { return Number(a.nr) - Number(b.nr); });
-    lastRobots = rs; control = j.control;
-    if (j.update_queue) renderUpdate(j.update_queue);
-    document.getElementById("updAll").disabled = !control || !!(j.update_queue && (j.update_queue.running.length || j.update_queue.waiting.length));
-    document.querySelectorAll("[data-all]").forEach(function (b) { b.disabled = !control; });
-    var listening = rs.filter(function (r) { return r.listening; }).length;
-    document.getElementById("allBar").style.display = j.view_only ? "none" : "";
-    var lb = document.getElementById("loginBtn");
-    lb.style.display = KIOSK || j.view_only || (control && !j.session) ? "none" : "";
-    lb.textContent = j.session ? "Afmelden" : "Docent aanmelden";
-    lb.dataset.session = j.session ? "1" : "";
-    document.getElementById("ctrlInfo").textContent = !control ? (j.pin_set ? "knoppen na Docent aanmelden"
-        : "knoppen: stel eerst een docenten-PIN in op de monitor zelf")
-      : listening + " robot(s) luisteren naar opdrachten";
-    if (document.activeElement && document.activeElement.tagName === "SELECT") return;   // don't close an open menu
-    // most common software version of the online robots (whole class on one version)
-    var on = rs.filter(function (r) { return r.seen && j.now - r.seen < 20; });
-    var upd = on.filter(function (r) { return updateAvailable(((r.data || {}).status || {}).updates); }).length;
-    var count = {}, common = "";
-    on.forEach(function (r) { var v = (((r.data || {}).status || {}).image_version || "").split(" ")[0]; if (v) count[v] = (count[v] || 0) + 1; });
-    Object.keys(count).forEach(function (v) { if (!common || count[v] > count[common]) common = v; });
-    if (Object.keys(count).length < 2) common = "";
-    document.getElementById("grid").innerHTML = rs.map(function (r) { return tile(r, j.now, common); }).join("");
-    var bad = document.querySelectorAll(".tile.bad").length, warn = document.querySelectorAll(".tile.warn").length;
-    document.getElementById("summary").textContent = on.length + " van " + rs.length + " robots online" +
-      (bad ? ", " + bad + " met een probleem" : "") + (warn ? ", " + warn + " met aandacht" : "") +
-      (upd ? ", " + upd + " met een update beschikbaar" : "") + " - " + new Date().toLocaleTimeString("nl-BE");
+    lastJ = j;
+    render();
   }).catch(function () { document.getElementById("summary").textContent = "monitor niet bereikbaar"; });
+}
+function render() {
+  var j = lastJ;
+  if (!j) return;
+  var rs = j.robots.slice().sort(function (a, b) { return Number(a.nr) - Number(b.nr); });
+  lastRobots = rs; control = j.control;
+  var busy = !!(j.update_queue && (j.update_queue.running.length || j.update_queue.waiting.length));
+  if (j.update_queue) renderUpdate(j.update_queue);
+  var nSel = selectedNames().length, updBtn = document.getElementById("updAll");
+  updBtn.disabled = !control || busy || !nSel;
+  updBtn.textContent = nSel ? nSel + " robot(s) bijwerken" : "Bijwerken (vink robots aan)";
+  document.getElementById("selPick").disabled = !control;
+  document.querySelectorAll("[data-all]").forEach(function (b) { b.disabled = !control; });
+  var listening = rs.filter(function (r) { return r.listening; }).length;
+  document.getElementById("allBar").style.display = j.view_only ? "none" : "";
+  var lb = document.getElementById("loginBtn");
+  lb.style.display = KIOSK || j.view_only || (control && !j.session) ? "none" : "";
+  lb.textContent = j.session ? "Afmelden" : "Docent aanmelden";
+  lb.dataset.session = j.session ? "1" : "";
+  document.getElementById("openAll").textContent = rs.some(function (r) { return !openTiles[r.robot]; }) ? "Alles open" : "Alles dicht";
+  document.getElementById("ctrlInfo").textContent = !control ? (j.pin_set ? "knoppen na Docent aanmelden"
+      : "knoppen: stel eerst een docenten-PIN in op de monitor zelf")
+    : listening + " robot(s) luisteren naar opdrachten";
+  if (document.activeElement && document.activeElement.tagName === "SELECT") return;   // don't close an open menu
+  // most common software version of the online robots (whole class on one version)
+  var on = rs.filter(function (r) { return r.seen && j.now - r.seen < 20; });
+  var upd = on.filter(function (r) { return updateAvailable(((r.data || {}).status || {}).updates); }).length;
+  var count = {}, common = "";
+  on.forEach(function (r) { var v = (((r.data || {}).status || {}).image_version || "").split(" ")[0]; if (v) count[v] = (count[v] || 0) + 1; });
+  Object.keys(count).forEach(function (v) { if (!common || count[v] > count[common]) common = v; });
+  if (Object.keys(count).length < 2) common = "";
+  // all robots together: each has its own AP, but the APs share the 2.4 GHz band in one room
+  var rx = 0, tx = 0;
+  on.forEach(function (r) { var s = (r.data || {}).status || {}; rx += s.net_rx_kbps || 0; tx += s.net_tx_kbps || 0; });
+  document.getElementById("grid").innerHTML = rs.map(function (r) { return tile(r, j.now, common); }).join("");
+  var bad = document.querySelectorAll(".tile.bad").length, warn = document.querySelectorAll(".tile.warn").length;
+  document.getElementById("summary").textContent = on.length + " van " + rs.length + " robots online" +
+    (bad ? ", " + bad + " met een probleem" : "") + (warn ? ", " + warn + " met aandacht" : "") +
+    (upd ? ", " + upd + " met een update beschikbaar" : "") +
+    (on.length ? " · wifi-verkeer samen ↓ " + rate(rx) + " · ↑ " + rate(tx) : "") + " - " + new Date().toLocaleTimeString("nl-BE");
 }
 function refreshLib() {
   fetch("/api/maps").then(function (x) { return x.json(); }).then(function (maps) {
