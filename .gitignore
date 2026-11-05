@@ -4,3 +4,4 @@ power_request
 .rpi_power
 wifi_scan.txt
 wifi_scan.tmp
+wifitest_log.jsonl
