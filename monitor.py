@@ -241,10 +241,11 @@ POWER_REQUEST = os.path.join(HERE, "power_request")
 
 def wifi_plan():
     """Planned AP channel per robot (docs/ap-migration.md; adapt to the table
-    layout in the room): {"9": {"5": 36, "2.4": 11}}."""
+    layout in the room): {"9": {"5": 36, "2.4": 11, "width": 20}}."""
     try:
         with open(WIFI_PLAN_CSV, newline="") as f:
-            return {r["nr"].strip(): {"5": int(r["kanaal_5ghz"]), "2.4": int(r["kanaal_24ghz"])}
+            return {r["nr"].strip(): {"5": int(r["kanaal_5ghz"]), "2.4": int(r["kanaal_24ghz"]),
+                                      "width": int(r.get("breedte_mhz") or 20)}
                     for r in csv.DictReader(f)}
     except (OSError, KeyError, ValueError):
         return {}
@@ -530,6 +531,13 @@ button:disabled, select:disabled { opacity:.4; cursor:default; }
 .warnline { margin-top:6px; font-size:.8rem; color:var(--yellow); }
 .info { margin-top:8px; font-size:.8rem; color:var(--muted); }
 .btns select { flex:1 1 6em; min-width:0; max-width:100%; }
+details.bar { display:block; }
+details.bar summary { cursor:pointer; }
+.spec { width:100%; max-width:760px; display:block; margin-top:8px; }
+.spec text { fill:var(--muted); font-size:11px; }
+.chtab { border-collapse:collapse; margin-top:8px; font-size:.82rem; }
+.chtab td, .chtab th { padding:2px 10px 2px 0; text-align:left; }
+.chtab th { color:var(--muted); font-weight:400; }
 </style></head><body>
 <header><h1>TurtleBot Monitor</h1><span class="sub" id="summary">laden...</span>
   <span style="margin-left:auto;display:flex;gap:6px"><button id="openAll">Alles open</button>
@@ -550,7 +558,7 @@ button:disabled, select:disabled { opacity:.4; cursor:default; }
     <button data-power="reboot">Herstarten</button> <button data-power="poweroff">Afsluiten</button></span>
 </div>
 <div class="bar" id="updBox" style="display:none"></div>
-<div class="bar" id="chanBox" style="display:none"></div>
+<details class="bar" id="chanBox" style="display:none"><summary id="chanSum"></summary><div id="chanBody"></div></details>
 <div class="grid" id="grid"></div>
 <div class="bar" style="margin-top:14px;display:block" id="libBox">
   <b>Kaartenbibliotheek</b> <span class="sub">- kaart + zones + routes. Een robot stuurt een kaart hierheen via
@@ -776,12 +784,8 @@ function tile(r, now, common) {
     health(s, msgs, warns, tips);
     var v = (s.image_version || "").split(" ")[0];
     if (common && v && v !== common) warns.push("andere versie dan de rest (" + common + ")");
-    var plan = ((lastJ || {}).wifi_plan || {})[String(Number(r.nr))];
-    if (s.wifi_band && plan) {
-      if (s.wifi_band === "2.4 GHz") warns.push("wifi op 2.4 GHz i.p.v. 5 GHz (laptop of robot zonder 5 GHz?)");
-      else if (s.wifi_band === "5 GHz" && s.wifi_channel !== plan["5"])
-        warns.push("wifikanaal " + s.wifi_channel + ", gepland " + plan["5"] + " (instelling van de AP)");
-    }
+    var cc = channelCheck(r);
+    if (cc && !cc.ok) warns.push("wifi " + cc.text);
     if (msgs.length) level = "bad"; else if (warns.length) level = "warn";
   }
   var open = !!openTiles[r.robot], st = robotState(l), nr = String(r.nr || "").padStart(2, "0");
@@ -809,7 +813,8 @@ function tile(r, now, common) {
       "<span>Batterij</span><span class=\"" + b[1] + "\">" + b[0] + "</span>" +
       "<span>CPU</span><span>" + (s.cpu_load_1min != null ? s.cpu_load_1min : "--") + ' load, <span class="' + tc + '">' + temp + "</span></span>" +
       "<span>Wifi</span><span>" + (s.wifi_signal_dbm != null ? s.wifi_signal_dbm + " dBm" : "--") +
-        (s.wifi_band ? '<br><span title="' + s.wifi_freq_mhz + ' MHz">' + esc(s.wifi_band) + " kanaal " + s.wifi_channel + "</span>" : "") + "</span>" +
+        (s.wifi_band ? '<br><span title="' + s.wifi_freq_mhz + ' MHz">' + esc(s.wifi_band) + " kanaal " + s.wifi_channel +
+          (s.wifi_width_mhz ? " · " + s.wifi_width_mhz + " MHz" : "") + "</span>" + channelMark(channelCheck(r)) : "") + "</span>" +
       "<span>Wifi-verkeer</span>" + wifiLoad(s) +
       "<span>Kaart</span><span>" + esc(l.map_running || "--") + "</span>" +
       "<span>USB / lidar</span><span>" + (l.usb_power === "off" ? "uit (spaarstand)" : l.usb_power === "on" ? "aan" : "--") +
@@ -824,28 +829,78 @@ function tile(r, now, common) {
     '<div class="sub" style="margin-top:8px">' + (KIOSK ? "statuspagina" :
       '<a href="http://10.0.' + Number(r.nr) + '.10:8080/" target="_blank">statuspagina</a>') + " (wifi TB-AP-" + nr + ")</div></div>";
 }
-// Which online robot uses which wifi channel: neighbours on the same channel
-// share its airtime (last year's lab: all robots on one network was a disaster)
+// AP channel plan (monitor/wifi_kanalen.csv) vs what the robot reports
+// (robot image 1.3.0+, width 1.4.0+): null = nothing to compare
+function channelCheck(r) {
+  var s = (r.data || {}).status || {}, plan = ((lastJ || {}).wifi_plan || {})[String(Number(r.nr))];
+  if (!s.wifi_band || !plan) return null;
+  if (s.wifi_band !== "5 GHz")
+    return { ok: false, plan: plan, text: "op " + s.wifi_band + " i.p.v. 5 GHz (laptop of robot zonder 5 GHz?)" };
+  if (s.wifi_channel !== plan["5"]) return { ok: false, plan: plan, text: "kanaal " + s.wifi_channel + ", gepland " + plan["5"] };
+  if (s.wifi_width_mhz && s.wifi_width_mhz !== plan.width)
+    return { ok: false, plan: plan, text: s.wifi_width_mhz + " MHz breed, gepland " + plan.width + " MHz" };
+  return { ok: true, plan: plan, text: "volgens plan" };
+}
+function channelMark(c) {
+  return !c ? "" : c.ok ? ' <span class="g" title="kanaal volgens plan">✓</span>' : ' <span class="y" title="' + esc(c.text) + '">✗</span>';
+}
+// Spectrum: every robot's channel as a block (centre ± width/2) on the
+// frequency axis, one row per robot - overlapping blocks share airtime.
+// Last year's lab: all robots on one network was a disaster.
+function spectrum(list, band) {
+  var lo = band === "5 GHz" ? 5170 : 2401, hi = band === "5 GHz" ? 5250 : 2483, step = band === "5 GHz" ? 20 : 5;
+  list.forEach(function (x) { lo = Math.min(lo, x.c - x.w / 2); hi = Math.max(hi, x.c + x.w / 2); });
+  lo -= step / 2; hi += step / 2;   // room for the outer blocks and labels
+  var W = 760, L = 40, R = 10, rowH = 18, top = 6, H = top + list.length * rowH + 30;
+  var X = function (f) { return L + (f - lo) / (hi - lo) * (W - L - R); };
+  var g = "";
+  // channel grid: 5 GHz every 20 MHz (36, 40, ...), 2.4 GHz channels 1, 6, 11
+  var chans = band === "5 GHz" ? [] : [1, 6, 11, 13];
+  if (band === "5 GHz") for (var f = Math.ceil((lo - 5000) / step) * step + 5000; f <= hi; f += step) chans.push((f - 5000) / 5);
+  chans.forEach(function (ch) {
+    var f = band === "5 GHz" ? 5000 + 5 * ch : 2407 + 5 * ch;
+    if (f < lo || f > hi) return;
+    g += '<line x1="' + X(f) + '" x2="' + X(f) + '" y1="' + top + '" y2="' + (H - 22) + '" stroke="var(--border)"/>' +
+      '<text x="' + X(f) + '" y="' + (H - 8) + '" text-anchor="middle">' + ch + "</text>";
+  });
+  list.forEach(function (x, i) {
+    var y = top + i * rowH, col = x.ok === false ? "var(--yellow)" : x.ok ? "var(--green)" : "var(--accent)";
+    g += '<rect x="' + X(x.c - x.w / 2) + '" y="' + (y + 2) + '" width="' + Math.max(2, X(x.c + x.w / 2) - X(x.c - x.w / 2)) +
+      '" height="' + (rowH - 5) + '" rx="3" fill="' + col + '" fill-opacity=".75"><title>' + esc(x.name + ": kanaal " + x.ch + ", " + x.w + " MHz") +
+      '</title></rect><text x="' + (L - 6) + '" y="' + (y + rowH - 5) + '" text-anchor="end">' + esc(x.label) + "</text>";
+  });
+  return '<div class="sub" style="margin-top:8px">' + band + " - kanaal (onderaan), één rij per robot</div>" +
+    '<svg class="spec" viewBox="0 0 ' + W + " " + H + '">' + g + "</svg>";
+}
 function renderChannels(on) {
-  var by = {};
+  var bands = {}, rows = [], bad = 0;
   on.forEach(function (r) {
     var s = (r.data || {}).status || {};
     if (!s.wifi_band) return;
-    var k = s.wifi_band + " kanaal " + s.wifi_channel;
-    (by[k] = by[k] || []).push(String(r.nr).padStart(2, "0"));
+    var c = channelCheck(r), w = s.wifi_width_mhz || 20, nr = String(r.nr).padStart(2, "0");
+    if (c && !c.ok) bad++;
+    (bands[s.wifi_band] = bands[s.wifi_band] || []).push({ name: r.robot, label: nr, ch: s.wifi_channel, w: w,
+      c: s.wifi_center_mhz || s.wifi_freq_mhz, ok: c ? c.ok : null });
+    rows.push("<tr><td>" + esc(r.robot) + "</td><td>" + esc(s.wifi_band) + "</td><td>" + s.wifi_channel + "</td><td>" +
+      (s.wifi_width_mhz ? s.wifi_width_mhz + " MHz" : "?") + "</td><td>" + (c ? c.plan["5"] + " · " + c.plan.width + " MHz" : "--") +
+      "</td><td>" + (c ? (c.ok ? '<span class="g">✓ volgens plan</span>' : '<span class="y">✗ ' + esc(c.text) + "</span>") : "") + "</td></tr>");
   });
-  var keys = Object.keys(by).sort(function (a, b) { return parseFloat(a) - parseFloat(b) || parseInt(a.split(" kanaal ")[1]) - parseInt(b.split(" kanaal ")[1]); });
   var box = document.getElementById("chanBox");
-  box.style.display = keys.length ? "" : "none";
-  box.innerHTML = "<b>Wifikanalen:</b> " + keys.map(function (k) {
-    // more robots on a channel than the plan puts there, or the 2.4 GHz fallback: yellow
-    var n = by[k].length, ch = parseInt(k.split(" kanaal ")[1]), planned = 0, plan = (lastJ || {}).wifi_plan || {};
-    Object.keys(plan).forEach(function (nr) { if (plan[nr]["5"] === ch) planned++; });
-    var c = k.indexOf("2.4") === 0 || n > planned ? "y" : "";
-    return '<span class="' + c + '" title="' + n + " robot(s) delen dit kanaal, gepland: " + planned + '">' +
-      esc(k) + ": " + by[k].join(", ") + "</span>";
-  }).join(" · ") + ' <span class="sub">(plan: monitor/wifi_kanalen.csv)</span>';
+  box.style.display = rows.length ? "" : "none";
+  if (!rows.length) return;
+  document.getElementById("chanSum").innerHTML = "<b>Wifikanalen</b> " + (bad
+    ? '<span class="y">' + bad + " robot(s) niet volgens plan</span>" : '<span class="g">alles volgens plan</span>') +
+    ' <span class="sub">(' + rows.length + " robot(s) gemeld; klik voor de grafiek)</span>";
+  document.getElementById("chanBody").innerHTML =
+    '<table class="chtab"><tr><th>Robot</th><th>Band</th><th>Kanaal</th><th>Breedte</th><th>Gepland</th><th></th></tr>' +
+    rows.join("") + "</table>" +
+    Object.keys(bands).sort().reverse().map(function (b) { return spectrum(bands[b], b); }).join("") +
+    '<div class="sub" style="margin-top:6px">Plan: monitor/wifi_kanalen.csv. Overlappende blokken delen de zendtijd; ' +
+    "20 MHz-kanalen 36/40/44/48 overlappen niet, 80 MHz neemt alle vier in.</div>";
 }
+var chanBox = document.getElementById("chanBox");
+try { chanBox.open = localStorage.getItem("tbmonChan") === "1"; } catch (e) {}
+chanBox.addEventListener("toggle", function () { try { localStorage.setItem("tbmonChan", chanBox.open ? "1" : "0"); } catch (e) {} });
 function refresh() {
   fetch("/api/robots").then(function (x) { return x.json(); }).then(function (j) {
     lastJ = j;
