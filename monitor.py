@@ -992,6 +992,16 @@ function rate(k) { return k < 1000 ? Math.round(k) + " kbit/s" : (k / 1000).toFi
 // Average over the last net_avg_s seconds when the robot sends it (image 1.5.0+), else the 2 s value
 function netRx(s) { return s.net_rx_kbps_avg != null ? s.net_rx_kbps_avg : s.net_rx_kbps; }
 function netTx(s) { return s.net_tx_kbps_avg != null ? s.net_tx_kbps_avg : s.net_tx_kbps; }
+// Who uses the robot: open Fenix pages (rosbridge websockets, image 1.7.0+)
+// on how many devices, and laptops on Zenoh (ROS 2 / Lichtblick)
+function usersText(s) {
+  var w = s.web_clients, z = (s.zenoh_clients || []).length, parts = [];
+  if (w) parts.push(w.pages + " pagina" + (w.pages === 1 ? "" : "'s") + " op " + w.devices + " toestel" + (w.devices === 1 ? "" : "len"));
+  if (w && w.terminal) parts.push(w.terminal + " terminal");
+  if (s.zenoh_clients) parts.push(z + " ROS-laptop" + (z === 1 ? "" : "s"));
+  return parts.length ? '<span title="pagina = open Fenix-pagina (rosbridge-verbinding); toestel = verschillend IP-adres; ' +
+    'ROS-laptop = Zenoh-client (ros2, Lichtblick)' + (z ? ": " + esc(s.zenoh_clients.join(", ")) : "") + '">' + parts.join(" · ") + "</span>" : "<span>--</span>";
+}
 function wifiLoad(s) {
   var rx = netRx(s), tx = netTx(s);
   if (rx == null || tx == null) return "<span>--</span>";
@@ -1064,6 +1074,7 @@ function tile(r, now, common) {
         (s.wifi_band ? '<br><span title="' + s.wifi_freq_mhz + ' MHz">' + esc(s.wifi_band) + " kanaal " + s.wifi_channel +
           (s.wifi_width_mhz ? " · " + s.wifi_width_mhz + " MHz" : "") + "</span>" + channelMark(channelCheck(r)) : "") + "</span>" +
       "<span>Wifi-verkeer</span>" + wifiLoad(s) +
+      "<span>Gebruikers</span>" + usersText(s) +
       "<span>Kaart</span><span>" + esc(l.map_running || "--") + "</span>" +
       "<span>USB / lidar</span><span>" + (l.usb_power === "off" ? "uit (spaarstand)" : l.usb_power === "on" ? "aan" : "--") +
         (s.lidar ? ", " + s.lidar.hours.toFixed(0) + " draaiuren" : "") + "</span>" +
@@ -1300,8 +1311,11 @@ function render() {
   Object.keys(count).forEach(function (v) { if (!common || count[v] > count[common]) common = v; });
   if (Object.keys(count).length < 2) common = "";
   // all robots together: each has its own AP, but the APs share the 2.4 GHz band in one room
-  var rx = 0, tx = 0;
-  on.forEach(function (r) { var s = (r.data || {}).status || {}; rx += netRx(s) || 0; tx += netTx(s) || 0; });
+  var rx = 0, tx = 0, pages = 0, haveWeb = false;
+  on.forEach(function (r) {
+    var s = (r.data || {}).status || {}; rx += netRx(s) || 0; tx += netTx(s) || 0;
+    if (s.web_clients) { haveWeb = true; pages += s.web_clients.pages; }
+  });
   document.getElementById("grid").innerHTML = rs.map(function (r) { return tile(r, j.now, common); }).join("");
   renderChannels(on);
   renderWifitest(j);
@@ -1309,7 +1323,8 @@ function render() {
   document.getElementById("summary").textContent = on.length + " van " + rs.length + " robots online" +
     (bad ? ", " + bad + " met een probleem" : "") + (warn ? ", " + warn + " met aandacht" : "") +
     (upd ? ", " + upd + " met een update beschikbaar" : "") +
-    (on.length ? " · wifi-verkeer samen ↓ " + rate(rx) + " · ↑ " + rate(tx) : "") + " - " + new Date().toLocaleTimeString("nl-BE");
+    (on.length ? " · wifi-verkeer samen ↓ " + rate(rx) + " · ↑ " + rate(tx) : "") +
+    (haveWeb ? " · " + pages + " pagina's open" : "") + " - " + new Date().toLocaleTimeString("nl-BE");
 }
 function refreshLib() {
   fetch("/api/maps").then(function (x) { return x.json(); }).then(function (maps) {
