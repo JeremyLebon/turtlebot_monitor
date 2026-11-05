@@ -1368,7 +1368,7 @@ function renderScan(sc) {
   }
   var html = '<div style="margin-top:14px"><b>Omgeving</b> <span class="sub">scan door de monitor-RPi, ' + sc.age +
     " s geleden; signaal in dBm zoals de RPi het ontvangt (-30 = zeer sterk, -70 = zwak). Blijft de RPi op zijn plaats, " +
-    "dan zakt een AP 6-10 dB als je hem van High op Low zet</span></div>" +
+    "dan zakt een AP 6-10 dB als je hem van High op Low zet; schommelingen tot ~6 dB zijn normaal</span></div>" +
     (aprows.length ? '<table class="chtab"><tr><th>AP</th><th>5 GHz</th><th>2.4 GHz</th></tr>' + aprows.join("") + "</table>" : "") +
     '<table class="chtab" style="margin-top:8px"><tr><th>Gepland kanaal</th><th>Eigen netwerken erop</th><th>Andere netwerken erop</th></tr>' +
     busy("5 GHz", [36, 40, 44, 48]) + busy("2.4 GHz", [1, 6, 11]) + "</table>" +
