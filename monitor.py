@@ -784,9 +784,8 @@ details.bar summary { cursor:pointer; }
   <div id="wtCtl" class="sub" style="margin-top:8px">
     <select id="wtMode"><option value="samen">alle robots samen</option><option value="na_elkaar">robots na elkaar</option></select>
     <select id="wtSecs"><option>10</option><option selected>15</option><option>30</option></select> s
-    <select id="wtRate" title="Per robot: zo snel mogelijk, of een vaste snelheid zoals een camerastream (640x480 = ~3,4 Mbit/s)">
-      <option value="0">zo snel mogelijk</option><option value="2">2 Mbit/s</option><option value="5" selected>5 Mbit/s</option>
-      <option value="10">10 Mbit/s</option><option value="20">20 Mbit/s</option></select>
+    <label title="Per robot, 0 = zo snel mogelijk. Een camerastream 640x480 is ~2-3 Mbit/s, met Lichtblick en kaart ~5-10 Mbit/s">
+      <input type="number" id="wtRate" min="0" max="100" step="0.5" value="5" style="width:4.5em"> Mbit/s per robot (0 = max)</label>
     <label title="De monitor stuurt evenveel terug: de AP zendt dan zoals naar de laptop van de student (elk byte gaat twee keer over hetzelfde kanaal)">
       <input type="checkbox" id="wtDown" checked> ↓ ook (zoals naar de laptop)</label>
     <button id="wtStart" data-icon="wifi">Start wifitest</button>
@@ -1300,7 +1299,7 @@ document.getElementById("wtStart").addEventListener("click", function () {
   if (!names.length) names = lastRobots.filter(function (r) { return r.listening; }).map(function (r) { return r.robot; });
   if (!names.length) { alert("Geen enkele robot luistert naar de monitor."); return; }
   var mode = document.getElementById("wtMode").value, secs = Number(document.getElementById("wtSecs").value),
-    rate = Number(document.getElementById("wtRate").value), down = document.getElementById("wtDown").checked;
+    rate = Math.max(0, Math.min(100, Number(String(document.getElementById("wtRate").value).replace(",", ".")) || 0)), down = document.getElementById("wtDown").checked;
   if (!confirm("Wifitest (" + (mode === "samen" ? "samen" : "na elkaar") + ", " + (rate ? rate + " Mbit/s" : "zo snel mogelijk") +
                (down ? ", ook ↓" : "") + ", " + secs + " s) met " + names.length + " robot(s)?")) return;
   wtSel = null;
