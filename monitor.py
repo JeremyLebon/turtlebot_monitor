@@ -757,7 +757,8 @@ function tile(r, now, common) {
       "<span>Toestand</span><span class=\"" + st[1] + "\">" + st[0] + "</span>" +
       "<span>Batterij</span><span class=\"" + b[1] + "\">" + b[0] + "</span>" +
       "<span>CPU</span><span>" + (s.cpu_load_1min != null ? s.cpu_load_1min : "--") + ' load, <span class="' + tc + '">' + temp + "</span></span>" +
-      "<span>Wifi</span><span>" + (s.wifi_signal_dbm != null ? s.wifi_signal_dbm + " dBm" : "--") + "</span>" +
+      "<span>Wifi</span><span>" + (s.wifi_signal_dbm != null ? s.wifi_signal_dbm + " dBm" : "--") +
+        (s.wifi_band ? '<br><span title="' + s.wifi_freq_mhz + ' MHz">' + esc(s.wifi_band) + " kanaal " + s.wifi_channel + "</span>" : "") + "</span>" +
       "<span>Wifi-verkeer</span>" + wifiLoad(s) +
       "<span>Kaart</span><span>" + esc(l.map_running || "--") + "</span>" +
       "<span>USB / lidar</span><span>" + (l.usb_power === "off" ? "uit (spaarstand)" : l.usb_power === "on" ? "aan" : "--") +
