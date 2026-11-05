@@ -74,6 +74,8 @@ if nmcli -t -f DEVICE,TYPE dev 2>/dev/null | grep -q ':wifi$'; then
 Description=TurtleBot Monitor: wifinetwerken in de buurt scannen
 [Service]
 Type=oneshot
+# Also the RPi's own addresses for the page (host_ip.sh -> host_ip.txt)
+ExecStartPre=/bin/sh "$HERE/host_ip.sh"
 ExecStart=/bin/sh -c 'nmcli -t -f SSID,BSSID,CHAN,FREQ,BANDWIDTH,SIGNAL dev wifi list --rescan yes > "$HERE/wifi_scan.tmp" && mv "$HERE/wifi_scan.tmp" "$HERE/wifi_scan.txt"'
 EOF
   sudo tee /etc/systemd/system/turtlebot-monitor-wifiscan.timer >/dev/null <<EOF

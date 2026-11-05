@@ -296,6 +296,16 @@ login_fails = {}     # ip -> [wrong PINs in a row, locked until]
 
 WIFI_PLAN_CSV = os.path.join(HERE, "wifi_kanalen.csv")
 WIFI_SCAN = os.path.join(HERE, "wifi_scan.txt")
+HOST_IP = os.path.join(HERE, "host_ip.txt")     # host_ip.sh on the RPi: "eth0 192.168.60.70/24"
+
+
+def host_ips():
+    """The RPi's own addresses (the container only knows its Docker network)."""
+    try:
+        with open(HOST_IP) as f:
+            return [{"iface": p[0], "ip": p[1].split("/")[0]} for p in (l.split() for l in f) if len(p) == 2]
+    except OSError:
+        return []
 # Monitor on its own RPi (install_rpi.sh): the container asks the host to shut
 # down or reboot through a file in this folder; a systemd path unit on the RPi
 # acts on it. POWER_MARK exists only there, so the buttons show only there.
@@ -626,6 +636,7 @@ class Handler(BaseHTTPRequestHandler):
                                                "view_only": VIEW_ONLY,
                                                "wifi_plan": wifi_plan(),
                                                "wifi_scan": wifi_scan(),
+                                               "host_ip": host_ips(),
                                                "wifitest": {"current": wifitest_result(wt["test"]) if wt["test"] else None,
                                                             "busy": bool(wt["test"] and not wt["test"].get("done")),
                                                             "history": wifitest_history()},
@@ -1319,8 +1330,11 @@ function render() {
   document.getElementById("grid").innerHTML = rs.map(function (r) { return tile(r, j.now, common); }).join("");
   renderChannels(on);
   renderWifitest(j);
+  // where the monitor itself is: what robots (monitor.conf) and browsers use
+  var where = (j.host_ip || []).map(function (h) { return h.ip + ":8090"; }).join(", ");
   var bad = document.querySelectorAll(".tile.bad").length, warn = document.querySelectorAll(".tile.warn").length;
-  document.getElementById("summary").textContent = on.length + " van " + rs.length + " robots online" +
+  document.getElementById("summary").textContent = (where ? "monitor op " + where + " · " : "") +
+    on.length + " van " + rs.length + " robots online" +
     (bad ? ", " + bad + " met een probleem" : "") + (warn ? ", " + warn + " met aandacht" : "") +
     (upd ? ", " + upd + " met een update beschikbaar" : "") +
     (on.length ? " · wifi-verkeer samen ↓ " + rate(rx) + " · ↑ " + rate(tx) : "") +

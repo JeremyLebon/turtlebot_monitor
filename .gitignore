@@ -5,3 +5,4 @@ power_request
 wifi_scan.txt
 wifi_scan.tmp
 wifitest_log.jsonl
+host_ip.txt
