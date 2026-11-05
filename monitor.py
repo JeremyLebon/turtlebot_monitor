@@ -14,7 +14,11 @@ Windows, in WSL en op Linux.
 Knoppen (stop, piep, bringup, bijwerken, uitschakelen, ...): de robot vraagt
 zelf om opdrachten (long-poll op /poll) - ook dat werkt door de NAT. De knoppen
 werken standaard enkel vanaf deze laptop (localhost): een student die vanaf
-een robot-AP de monitor opent, kan niets bedienen.
+een robot-AP de monitor opent, kan niets bedienen. Vanaf een ander toestel:
+"Docent aanmelden" met de docenten-PIN (dezelfde als Beheer op de robots).
+
+    python monitor.py --set-pin    # docenten-PIN van de monitor (eerste keer)
+    docker exec -it turtlebot-monitor python monitor.py --set-pin   # in Docker
 
 De robots moeten deze laptop (of de RPi, README optie E) kunnen bereiken: zet
 het adres in turtlebot_robot/monitor.conf
@@ -42,6 +46,8 @@ CONFIG_CSV = os.path.join(HERE, "..", "turtlebot_config.csv")
 # Kaartenbibliotheek: kaartbundels (kaart + zones + routes) van de robots,
 # om op andere robots te zetten. Bestanden: monitor/maps/<naam>.tbmap.json
 MAP_LIB = os.path.join(HERE, "maps")
+PIN_FILE = os.path.join(HERE, "docent_pin")   # hash of the docenten-PIN (not in git)
+SESSION_S = 12 * 3600                         # "Docent aanmelden" lasts one school day
 MAP_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 
 
@@ -197,6 +203,34 @@ def pin_hash(pin):
     return "pbkdf2_sha256:200000:%s:%s" % (salt, h)
 
 
+def pin_ok(pin, stored):
+    try:
+        algo, it, salt, h = stored.split(":")
+        got = hashlib.pbkdf2_hmac("sha256", pin.encode(), bytes.fromhex(salt), int(it)).hex()
+    except ValueError:
+        return False
+    return algo == "pbkdf2_sha256" and secrets.compare_digest(got, h)
+
+
+def load_pin():
+    try:
+        with open(PIN_FILE) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def save_pin(h):
+    with open(PIN_FILE + ".tmp", "w") as f:
+        f.write(h + "\n")
+    os.chmod(PIN_FILE + ".tmp", 0o600)
+    os.replace(PIN_FILE + ".tmp", PIN_FILE)
+
+
+sessions = {}        # cookie token -> expiry ("Docent aanmelden")
+login_fails = {}     # ip -> [wrong PINs in a row, locked until]
+
+
 def expected_robots():
     """Robots from turtlebot_config.csv, so never-seen robots show up too."""
     try:
@@ -210,26 +244,68 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass   # quiet: 9 robots x every 5 s
 
-    def _send(self, code, body, ctype):
+    def _send(self, code, body, ctype, cookie=None):
         data = body.encode() if isinstance(body, str) else body
         self.send_response(code)
         self.send_header("Content-Type", ctype)
+        if cookie is not None:
+            self.send_header("Set-Cookie", "tbmon=%s; Path=/; HttpOnly; SameSite=Strict; Max-Age=%d"
+                             % (cookie, SESSION_S if cookie else 0))
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
 
+    def _session(self):
+        m = re.search(r"(?:^|;\s*)tbmon=([\w-]+)", self.headers.get("Cookie", ""))
+        return m.group(1) if m and sessions.get(m.group(1), 0) > time.time() else None
+
     def _may_control(self):
         # control server (--control-port, Docker: published on 127.0.0.1 only),
-        # or a browser on this laptop itself
+        # a browser on this laptop itself, or a teacher logged in with the PIN
         return not VIEW_ONLY and (getattr(self.server, "control", False) or REMOTE_CONTROL
-                                  or self.client_address[0] in ("127.0.0.1", "::1"))
+                                  or self.client_address[0] in ("127.0.0.1", "::1")
+                                  or self._session() is not None)
+
+    def _login(self):
+        ip, now = self.client_address[0], time.time()
+        fail = login_fails.setdefault(ip, [0, 0])
+        if fail[1] > now:
+            return self._send(429, json.dumps({"error": "Te veel foute PIN's - wacht %d s" % (fail[1] - now)}),
+                              "application/json")
+        stored = load_pin()
+        if not stored:
+            return self._send(409, json.dumps({"error": "Nog geen docenten-PIN op de monitor. Stel er een in met "
+                                                        "'Docenten-PIN' op de monitor zelf, of met --set-pin."}),
+                              "application/json")
+        try:
+            pin = str(self._read_json()["pin"])
+        except (ValueError, KeyError, TypeError):
+            return self._send(400, "bad request", "text/plain")
+        if not pin_ok(pin, stored):
+            fail[0] += 1
+            if fail[0] >= 5:            # 5 wrong in a row: 1 minute pause (PIN = few digits)
+                fail[:] = [0, now + 60]
+            return self._send(403, json.dumps({"error": "Foute PIN"}), "application/json")
+        login_fails.pop(ip, None)
+        for t in [t for t, exp in sessions.items() if exp < now]:
+            del sessions[t]
+        token = secrets.token_urlsafe(24)
+        sessions[token] = now + SESSION_S
+        return self._send(200, json.dumps({"ok": True}), "application/json", cookie=token)
 
     def _read_json(self):
         n = int(self.headers.get("Content-Length", 0))
         return json.loads(self.rfile.read(min(n, 20 * 1024 * 1024)))   # map bundles: some 100 kB
 
     def do_POST(self):
+        if self.path == "/api/login":
+            if VIEW_ONLY:
+                return self._send(403, json.dumps({"error": "monitor gestart met --view-only"}), "application/json")
+            return self._login()
+        if self.path == "/api/logout":
+            sessions.pop(self._session(), None)
+            return self._send(200, json.dumps({"ok": True}), "application/json", cookie="")
         if self.path == "/result":     # robot: result of a command
             try:
                 r = self._read_json()
@@ -293,7 +369,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, "bad request", "text/plain")
             if not (pin.isdigit() and 4 <= len(pin) <= 8):
                 return self._send(400, json.dumps({"error": "PIN moet 4 tot 8 cijfers zijn"}), "application/json")
-            queue_command(names, "set_pin", pin_hash(pin))
+            h = pin_hash(pin)
+            save_pin(h)                 # same PIN for "Docent aanmelden" on the monitor
+            queue_command(names, "set_pin", h)
             return self._send(200, json.dumps({"queued": len(names)}), "application/json")
         if self.path == "/api/cmd":    # button on the page
             if VIEW_ONLY:
@@ -366,6 +444,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({"now": time.time(), "robots": out,
                                                "update_queue": update_queue_state(),
                                                "control": self._may_control(),
+                                               "session": self._session() is not None,
+                                               "pin_set": bool(load_pin()),
                                                "view_only": VIEW_ONLY}),
                               "application/json")
         if self.path.split("?")[0] in ("/", "/index.html"):   # also "/?kiosk" (kiosk.sh)
@@ -409,7 +489,8 @@ button:disabled, select:disabled { opacity:.4; cursor:default; }
 .btns { display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; }
 .res { margin-top:6px; font-size:.78rem; color:var(--muted); }
 </style></head><body>
-<header><h1>TurtleBot Monitor</h1><span class="sub" id="summary">laden...</span></header>
+<header><h1>TurtleBot Monitor</h1><span class="sub" id="summary">laden...</span>
+  <button id="loginBtn" style="display:none;margin-left:auto">Docent aanmelden</button></header>
 <div class="bar" id="allBar">
   <b>Alle robots:</b>
   <button class="stop" data-all="stop_all" title="Alle launches stoppen - motoren stil">STOP ALLES</button>
@@ -418,7 +499,7 @@ button:disabled, select:disabled { opacity:.4; cursor:default; }
   <select id="updPar" title="Hoeveel robots tegelijk"><option value="1">1 tegelijk</option><option value="2" selected>2 tegelijk</option><option value="3">3 tegelijk</option></select>
   <button id="updCancel" style="display:none" title="Wachtende robots niet meer bijwerken (lopende updates werken af)">Wachtrij stoppen</button>
   <button data-all="shutdown" title="Alle robots uitschakelen (einde les)">Uitschakelen</button>
-  <button id="pinAll" title="Docenten-PIN voor Beheer op de statuspagina, voor alle robots die luisteren (enkel de hash gaat naar de robots)">Docenten-PIN</button>
+  <button id="pinAll" title="Docenten-PIN voor Beheer op de statuspagina, voor alle robots die luisteren, en voor Docent aanmelden op deze monitor (enkel de hash gaat naar de robots)">Docenten-PIN</button>
   <span class="sub" id="ctrlInfo"></span>
 </div>
 <div class="bar" id="updBox" style="display:none"></div>
@@ -475,6 +556,11 @@ function post(url, body) {
   return fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) })
     .then(function (x) { if (!x.ok) return x.json().then(function (j) { alert(j.error || "geweigerd"); }); refresh(); });
 }
+document.getElementById("loginBtn").addEventListener("click", function () {
+  if (this.dataset.session) { post("/api/logout"); return; }
+  var pin = prompt("Docenten-PIN:");
+  if (pin) post("/api/login", { pin: pin });
+});
 document.getElementById("updAll").addEventListener("click", function () {
   var names = lastRobots.filter(function (r) { return r.listening; }).map(function (r) { return r.robot; });
   if (!names.length) { alert("Geen enkele robot luistert naar de monitor."); return; }
@@ -626,7 +712,12 @@ function refresh() {
     document.querySelectorAll("[data-all]").forEach(function (b) { b.disabled = !control; });
     var listening = rs.filter(function (r) { return r.listening; }).length;
     document.getElementById("allBar").style.display = j.view_only ? "none" : "";
-    document.getElementById("ctrlInfo").textContent = !control ? "knoppen enkel op de laptop van de docent"
+    var lb = document.getElementById("loginBtn");
+    lb.style.display = KIOSK || j.view_only || (control && !j.session) ? "none" : "";
+    lb.textContent = j.session ? "Afmelden" : "Docent aanmelden";
+    lb.dataset.session = j.session ? "1" : "";
+    document.getElementById("ctrlInfo").textContent = !control ? (j.pin_set ? "knoppen na Docent aanmelden"
+        : "knoppen: stel eerst een docenten-PIN in op de monitor zelf")
       : listening + " robot(s) luisteren naar opdrachten";
     if (document.activeElement && document.activeElement.tagName === "SELECT") return;   // don't close an open menu
     // most common software version of the online robots (whole class on one version)
@@ -684,9 +775,18 @@ def main():
     ap.add_argument("--remote-control", action="store_true",
                     help="knoppen ook toelaten vanaf andere toestellen dan deze laptop")
     ap.add_argument("--view-only", action="store_true", help="enkel kijken: geen knoppen")
+    ap.add_argument("--set-pin", action="store_true",
+                    help="docenten-PIN van de monitor instellen (Docent aanmelden) en stoppen")
     ap.add_argument("--control-port", type=int, default=0,
                     help="tweede poort waarop de knoppen altijd werken (Docker: enkel op 127.0.0.1 publiceren)")
     args = ap.parse_args()
+    if args.set_pin:
+        import getpass
+        pin = getpass.getpass("Nieuwe docenten-PIN (4-8 cijfers): ")
+        if not (pin.isdigit() and 4 <= len(pin) <= 8) or getpass.getpass("Nog eens: ") != pin:
+            raise SystemExit("Niet ingesteld: 4 tot 8 cijfers, twee keer hetzelfde.")
+        save_pin(pin_hash(pin))
+        raise SystemExit("Docenten-PIN ingesteld (%s)." % PIN_FILE)
     global REMOTE_CONTROL, VIEW_ONLY
     REMOTE_CONTROL = args.remote_control
     VIEW_ONLY = args.view_only

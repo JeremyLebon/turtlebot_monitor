@@ -77,8 +77,14 @@ plus de firewallregel uit A (`firewall_regel.ps1`). Starten in WSL:
   de knoppen van de robot.
 - Uitschakelen: `MONITOR_URL=` leeg in monitor.conf (robots sturen niets, luisteren niet), `python monitor.py --view-only` (monitor zonder knoppen), of per robot het vinkje "Monitor-opdrachten toelaten" op de Systeem-pagina.
 - De knoppen werken **enkel vanaf de laptop zelf** (`localhost`), zodat een
-  student die de monitor vanaf een robot-AP opent niets kan bedienen. Bewust
-  openzetten: `python monitor.py --remote-control`.
+  student die de monitor vanaf een robot-AP opent niets kan bedienen. Vanaf
+  een ander toestel: **Docent aanmelden** (rechtsboven) met de docenten-PIN;
+  dat blijft 12 uur geldig in die browser. Na 5 foute PIN's: 1 minuut wachten.
+  De PIN is dezelfde als **Docenten-PIN** (Beheer op de robots); de eerste keer
+  instellen: `python monitor.py --set-pin` (Docker:
+  `docker exec -it turtlebot-monitor python monitor.py --set-pin`). Enkel de
+  hash staat in `monitor/docent_pin`. Bewust voor iedereen openzetten:
+  `python monitor.py --remote-control`.
 - Rijden kan niet via de monitor (vertraging, geen zicht op de robot) - daarvoor
   de statuspagina op de wifi van de robot of de joystick.
 
@@ -131,8 +137,15 @@ dan kan iedereen met een muis of aanraakscherm aan de RPi ook *STOP ALLES*,
 bijwerken of uitschakelen. `--geen-scherm` zet het scherm-opstarten uit.
 Opnieuw uitvoeren met een andere optie mag.
 
-**Knoppen vanaf je laptop.** De knoppen werken enkel op de RPi zelf. Vanaf je
-laptop via een SSH-tunnel:
+**Knoppen vanaf je laptop.** Open `http://<ip-rpi>:8090` en klik **Docent
+aanmelden** met de docenten-PIN. De eerste keer stel je die PIN in op de RPi:
+
+```sh
+ssh -t <gebruiker>@<ip-rpi> docker exec -it turtlebot-monitor python monitor.py --set-pin
+```
+
+Het scherm aan de RPi zelf toont nooit de knop Docent aanmelden. Zonder PIN
+kan het ook via een SSH-tunnel:
 
 ```sh
 ssh -L 8091:localhost:8091 <gebruiker>@<ip-rpi>
