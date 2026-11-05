@@ -312,7 +312,8 @@ login_fails = {}     # ip -> [wrong PINs in a row, locked until]
 
 
 WIFI_PLAN_CSV = os.path.join(HERE, "wifi_kanalen.csv")
-WIFI_SCAN = os.path.join(HERE, "wifi_scan.txt")
+WIFI_SCAN = os.path.join(HERE, "wifi_scan.txt")          # older installs (nmcli, %)
+WIFI_SCAN_JSON = os.path.join(HERE, "wifi_scan.json")    # wifi_scan.py on the RPi (dBm)
 HOST_IP = os.path.join(HERE, "host_ip.txt")     # host_ip.sh on the RPi: "eth0 192.168.60.70/24"
 
 
@@ -357,33 +358,48 @@ def _center_mhz(ch, freq, width):
 
 def wifi_scan():
     """Networks around the monitor RPi: its free wlan0 scans every minute
-    (install_rpi.sh, systemd timer -> wifi_scan.txt). One entry per radio:
-    the school APs send 4-5 SSIDs (eduroam, VIVES-GUEST, ...) per radio."""
+    (install_rpi.sh, systemd timer). wifi_scan.py writes wifi_scan.json with
+    the signal in dBm; older installs wrote nmcli's wifi_scan.txt (0-100 %,
+    converted back to dBm the way NetworkManager made it: % = 2 * (dBm + 100)).
+    One entry per radio: the school APs send 4-5 SSIDs (eduroam, VIVES-GUEST,
+    ...) per radio."""
+    bss = []
     try:
-        age = time.time() - os.path.getmtime(WIFI_SCAN)
-        if age > 300:
+        age = time.time() - os.path.getmtime(WIFI_SCAN_JSON)
+        with open(WIFI_SCAN_JSON) as f:
+            bss = json.load(f)["bss"]
+    except (OSError, ValueError, KeyError):
+        try:
+            age = time.time() - os.path.getmtime(WIFI_SCAN)
+            with open(WIFI_SCAN) as f:
+                lines = f.read().splitlines()
+        except OSError:
             return None
-        with open(WIFI_SCAN) as f:
-            lines = f.read().splitlines()
-    except OSError:
+        for line in lines:
+            p = [x.replace("\\:", ":") for x in re.split(r"(?<!\\):", line)]
+            try:
+                ch, freq, width = int(p[2]), int(p[3].split()[0]), int(p[4].split()[0])
+                bss.append({"ssid": p[0], "bssid": p[1], "ch": ch, "freq": freq, "width": width,
+                            "center": _center_mhz(ch, freq, width), "dbm": int(p[5]) / 2 - 100})
+            except (IndexError, ValueError):
+                continue
+    if age > 300:
         return None
     radios = {}
-    for line in lines:
-        p = [x.replace("\\:", ":") for x in re.split(r"(?<!\\):", line)]
-        try:
-            ssid, bssid, ch, freq = p[0], p[1], int(p[2]), int(p[3].split()[0])
-            width, signal = int(p[4].split()[0]), int(p[5])
-        except (IndexError, ValueError):
+    for b in bss:
+        ssid, ch, dbm = b.get("ssid") or "", b.get("ch"), b.get("dbm")
+        if ch is None or dbm is None:
             continue
         # same radio = same BSSID except the last digit; our own APs never merge
         # (TB-AP-04 and -07 differ only in that digit)
-        key = (ssid if ssid.startswith("TB-AP-") else bssid[:-1], ch)
-        r = radios.setdefault(key, {"ssids": [], "ch": ch, "freq": freq, "width": width,
-                                                 "center": _center_mhz(ch, freq, width), "signal": signal})
+        key = (ssid if ssid.startswith("TB-AP-") else b.get("bssid", "")[:-1], ch)
+        r = radios.setdefault(key, {"ssids": [], "ch": ch, "freq": b["freq"], "width": b["width"],
+                                    "center": b["center"], "signal": dbm})
         if ssid and ssid not in r["ssids"]:
             r["ssids"].append(ssid)
-        r["signal"] = max(r["signal"], signal)
-    return {"age": round(age), "radios": sorted(radios.values(), key=lambda r: (r["freq"], -r["signal"]))}
+        r["signal"] = max(r["signal"], dbm)
+    return {"age": round(age), "unit": "dBm",
+            "radios": sorted(radios.values(), key=lambda r: (r["freq"], -r["signal"]))}
 
 
 def expected_robots():
@@ -1195,7 +1211,7 @@ function spectrum(list, band, opt) {
     var y = top + i * rowH, col = x.other ? "var(--muted)" : x.ok === false ? "var(--yellow)" : x.ok ? "var(--green)" : "var(--accent)";
     g += '<rect x="' + X(x.c - x.w / 2) + '" y="' + (y + 2) + '" width="' + Math.max(2, X(x.c + x.w / 2) - X(x.c - x.w / 2)) +
       '" height="' + (rowH - 5) + '" rx="3" fill="' + col + '" fill-opacity="' + (x.other ? ".45" : ".75") + '"><title>' +
-      esc(x.name + ": kanaal " + x.ch + ", " + x.w + " MHz" + (x.signal != null ? ", signaal " + x.signal + " %" : "")) +
+      esc(x.name + ": kanaal " + x.ch + ", " + x.w + " MHz" + (x.signal != null ? ", signaal " + x.signal + " dBm" : "")) +
       '</title></rect><text x="' + (L - 6) + '" y="' + (y + rowH - 5) + '" text-anchor="end">' + esc(x.label) + "</text>";
   });
   return '<div class="sub" style="margin-top:8px">' + band + " - kanaal (onderaan), " + (opt.rows || "één rij per robot") + "</div>" +
@@ -1230,7 +1246,8 @@ function renderChannels(on) {
     Object.keys(bands).sort().reverse().map(function (b) { return spectrum(bands[b], b); }).join("") : "") +
     (scan ? scan.html : "") +
     '<div class="sub" style="margin-top:6px">Plan: monitor/wifi_kanalen.csv. Overlappende blokken delen de zendtijd; ' +
-    "20 MHz-kanalen 36/40/44/48 overlappen niet, 80 MHz neemt alle vier in.</div>";
+    "20 MHz-kanalen 36/40/44/48 overlappen op papier niet, maar AP's vlak bij elkaar storen ook hun buurkanaal (zet ze op " +
+    "Transmit Power Low, zie docs/ap-migration.md); 80 MHz neemt alle vier in.</div>";
 }
 // Wifi around the monitor RPi (its free wlan0 scans every minute): the TB-AP
 // settings checked against the plan, how busy each planned channel is, and
@@ -1332,7 +1349,7 @@ function renderScan(sc) {
     if (!a) return "<td>--</td>";
     var t = "kanaal " + a.r.ch + " · " + a.r.width + " MHz";
     return "<td>" + (a.ok === false ? '<span class="y" title="gepland: kanaal ' + a.want + " · " + a.ww + ' MHz">✗ ' + t + "</span>"
-      : a.ok ? '<span class="g">✓</span> ' + t : t) + ' <span class="sub">' + a.r.signal + " %</span></td>";
+      : a.ok ? '<span class="g">✓</span> ' + t : t) + ' <span class="sub">' + a.r.signal + " dBm</span></td>";
   }
   var aprows = Object.keys(aps).sort().map(function (k) {
     return "<tr><td>TB-AP-" + k + "</td>" + cell(aps[k]["5 GHz"]) + cell(aps[k]["2.4 GHz"]) + "</tr>";
@@ -1340,17 +1357,18 @@ function renderScan(sc) {
   // busy-ness of each planned channel: radios whose block covers it
   function busy(b, chans) {
     return chans.map(function (ch) {
-      var f = b === "5 GHz" ? 5000 + 5 * ch : 2407 + 5 * ch, ours = 0, other = 0, best = 0;
+      var f = b === "5 GHz" ? 5000 + 5 * ch : 2407 + 5 * ch, ours = 0, other = 0, best = -200;
       bands[b].forEach(function (x) {
         if (Math.abs(x.c - f) >= x.w / 2 + (b === "5 GHz" ? 0 : 10)) return;   // 2.4 GHz: 20 MHz channels 5 MHz apart overlap
         if (x.other) { other++; best = Math.max(best, x.signal); } else ours++;
       });
-      return "<tr><td>" + b + " kanaal " + ch + "</td><td>" + ours + "</td><td" + (best >= 60 ? ' class="y"' : "") + ">" + other +
-        (other ? ' <span class="sub">(sterkste ' + best + " %)</span>" : "") + "</td></tr>";
+      return "<tr><td>" + b + " kanaal " + ch + "</td><td>" + ours + "</td><td" + (best >= -65 ? ' class="y"' : "") + ">" + other +
+        (other ? ' <span class="sub">(sterkste ' + best + " dBm)</span>" : "") + "</td></tr>";
     }).join("");
   }
   var html = '<div style="margin-top:14px"><b>Omgeving</b> <span class="sub">scan door de monitor-RPi, ' + sc.age +
-    " s geleden; signaal 0-100 % zoals de RPi het ontvangt</span></div>" +
+    " s geleden; signaal in dBm zoals de RPi het ontvangt (-30 = zeer sterk, -70 = zwak). Blijft de RPi op zijn plaats, " +
+    "dan zakt een AP 6-10 dB als je hem van High op Low zet</span></div>" +
     (aprows.length ? '<table class="chtab"><tr><th>AP</th><th>5 GHz</th><th>2.4 GHz</th></tr>' + aprows.join("") + "</table>" : "") +
     '<table class="chtab" style="margin-top:8px"><tr><th>Gepland kanaal</th><th>Eigen netwerken erop</th><th>Andere netwerken erop</th></tr>' +
     busy("5 GHz", [36, 40, 44, 48]) + busy("2.4 GHz", [1, 6, 11]) + "</table>" +

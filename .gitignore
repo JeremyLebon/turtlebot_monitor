@@ -6,3 +6,5 @@ wifi_scan.txt
 wifi_scan.tmp
 wifitest_log.jsonl
 host_ip.txt
+wifi_scan.json
+wifi_scan.json.tmp

@@ -76,7 +76,8 @@ Description=TurtleBot Monitor: wifinetwerken in de buurt scannen
 Type=oneshot
 # Also the RPi's own addresses for the page (host_ip.sh -> host_ip.txt)
 ExecStartPre=/bin/sh "$HERE/host_ip.sh"
-ExecStart=/bin/sh -c 'nmcli -t -f SSID,BSSID,CHAN,FREQ,BANDWIDTH,SIGNAL dev wifi list --rescan yes > "$HERE/wifi_scan.tmp" && mv "$HERE/wifi_scan.tmp" "$HERE/wifi_scan.txt"'
+# signal in dBm via nl80211 (nmcli only gives %, stuck at 100 % close by)
+ExecStart=/usr/bin/python3 "$HERE/wifi_scan.py"
 EOF
   sudo tee /etc/systemd/system/turtlebot-monitor-wifiscan.timer >/dev/null <<EOF
 [Unit]
