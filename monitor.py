@@ -126,14 +126,19 @@ WIFITEST_LOG = os.path.join(HERE, "wifitest_log.jsonl")
 wt = {"test": None, "history": []}     # test: {"id", "mode", "secs", "started", "order", "robots": {...}}
 
 
-def wifitest_start(names, mode, secs):
+def wifitest_start(names, mode, secs, rate=0, down=False):
+    """rate: Mbit/s per robot (0 = as fast as possible, a fixed rate is like a
+    camera stream); down: the monitor sends the same back, so the AP also
+    transmits - like the hop to a student's laptop on the same channel."""
     with cond:
         cur = wt["test"]
         if cur and not cur.get("done"):
             return "er loopt al een wifitest"
         cmd_seq[0] += 1
-        wt["test"] = {"id": cmd_seq[0], "mode": mode, "secs": secs, "started": time.time(), "order": list(names),
-                      "robots": {n: {"bytes": 0, "t0": None, "t1": None} for n in names}}
+        wt["test"] = {"id": cmd_seq[0], "mode": mode, "secs": secs, "rate": rate, "down": down,
+                      "started": time.time(), "order": list(names),
+                      "robots": {n: {"bytes": 0, "t0": None, "t1": None, "dbytes": 0, "d0": None, "d1": None}
+                                 for n in names}}
     threading.Thread(target=_wifitest_run, args=(wt["test"],), daemon=True).start()
     return None
 
@@ -143,7 +148,7 @@ def _wifitest_run(t):
     for g in groups:
         for n in g:
             t["robots"][n]["sent"] = time.time()
-        queue_command(g, "wifitest", "%d:%d" % (t["id"], t["secs"]))
+        queue_command(g, "wifitest", "%d:%d:%g:%d" % (t["id"], t["secs"], t["rate"], 1 if t["down"] else 0))
         end = time.time() + t["secs"] + 20      # poll delay + a robot that never starts
         while time.time() < end and not all(t["robots"][n]["t1"] and time.time() - t["robots"][n]["t1"] > 1
                                             for n in g):
@@ -160,12 +165,24 @@ def _wifitest_run(t):
 
 
 def wifitest_result(t):
-    out = {}
-    for n, r in t["robots"].items():
-        dt = (r["t1"] or 0) - (r["t0"] or 0)
-        out[n] = round(r["bytes"] * 8 / dt / 1e6, 1) if dt > 0.5 else None
-    return {"id": t["id"], "mode": t["mode"], "secs": t["secs"], "t": t["started"], "mbps": out,
-            "total": round(sum(v for v in out.values() if v), 1), "done": bool(t.get("done"))}
+    def mbps(b, a, z):
+        dt = (z or 0) - (a or 0)
+        return round(b * 8 / dt / 1e6, 1) if dt > 0.5 else None
+    up = {n: mbps(r["bytes"], r["t0"], r["t1"]) for n, r in t["robots"].items()}
+    out = {"id": t["id"], "mode": t["mode"], "secs": t["secs"], "t": t["started"], "rate": t.get("rate", 0),
+           "down": bool(t.get("down")), "mbps": up, "total": round(sum(v for v in up.values() if v), 1),
+           "done": bool(t.get("done"))}
+    if t.get("down"):
+        # the robot's own count when it sent it, else what the monitor wrote (too high by its buffer)
+        dn = {n: (round(r["robot_down"][0] * 8 / r["robot_down"][1] / 1e6, 1) if r["robot_down"][1] > 0.5 else None)
+              if r.get("robot_down") else mbps(r["dbytes"], r["d0"], r["d1"]) for n, r in t["robots"].items()}
+        out["mbps_down"] = dn
+        out["total_down"] = round(sum(v for v in dn.values() if v), 1)
+    if t.get("rate"):   # reached = at least 90 % of the rate (both ways)
+        need = 0.9 * t["rate"]
+        out["reached"] = sum(1 for n in up if (up[n] or 0) >= need and
+                             (not t.get("down") or (out["mbps_down"][n] or 0) >= need))
+    return out
 
 
 def wifitest_history():
@@ -543,17 +560,27 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, json.dumps({"queued": len(names)}), "application/json")
         if self.path.startswith("/wifitest/upload?"):   # robot: wifitest data, counted and dropped
             return self._wifitest_upload()
+        if self.path == "/wifitest/done":   # robot: how much of /wifitest/download really arrived
+            try:
+                r = self._read_json()
+                t, name = wt["test"], str(r["robot"])[:40]
+                if t and str(t["id"]) == str(r["id"]) and name in t["robots"]:
+                    t["robots"][name]["robot_down"] = (int(r["down_bytes"]), float(r["down_s"]))
+            except (ValueError, KeyError, TypeError):
+                return self._send(400, "bad request", "text/plain")
+            return self._send(200, "ok", "text/plain")
         if self.path == "/api/wifitest":
             if VIEW_ONLY or not self._may_control():
                 return self._send(403, json.dumps({"error": "eerst Docent aanmelden"}), "application/json")
             try:
                 r = self._read_json()
                 names, mode, secs = [str(n)[:40] for n in r["robots"]], r.get("mode", "samen"), int(r.get("secs", 15))
+                rate, down = max(0.0, min(100.0, float(r.get("rate", 0)))), bool(r.get("down"))
             except (ValueError, KeyError, TypeError):
                 return self._send(400, "bad request", "text/plain")
             if not names or mode not in ("samen", "na_elkaar"):
                 return self._send(400, json.dumps({"error": "geen robots of onbekende modus"}), "application/json")
-            err = wifitest_start(names, "samen" if mode == "samen" else "na elkaar", max(5, min(60, secs)))
+            err = wifitest_start(names, "samen" if mode == "samen" else "na elkaar", max(5, min(60, secs)), rate, down)
             return self._send(409 if err else 200, json.dumps({"error": err} if err else {"ok": True}),
                               "application/json")
         if self.path != "/push":
@@ -590,7 +617,33 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             pass   # robot closes the connection when its time is up
 
+    def _wifitest_download(self):
+        q = urllib.parse.parse_qs(self.path.split("?", 1)[1])
+        name, tid = q.get("robot", [""])[0][:40], q.get("id", [""])[0]
+        t = wt["test"]
+        if not t or str(t["id"]) != tid or name not in t["robots"] or not t.get("down"):
+            return self._send(409, "geen wifitest bezig", "text/plain")
+        r, stop, buf = t["robots"][name], time.time() + t["secs"] + 5, b"\0" * 65536
+        self.close_connection = True
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(10 ** 11))
+            self.end_headers()
+            self.connection.settimeout(5)
+            while time.time() < stop:   # the robot reads at its rate: TCP slows us down
+                self.wfile.write(buf)
+                now = time.time()
+                if r["d0"] is None:
+                    r["d0"] = now
+                r["dbytes"] += len(buf)
+                r["d1"] = now
+        except OSError:
+            pass   # robot closes the connection when its time is up
+
     def do_GET(self):
+        if self.path.startswith("/wifitest/download?"):
+            return self._wifitest_download()
         if self.path.startswith("/poll?"):     # robot waits for commands (long-poll)
             from urllib.parse import parse_qs, urlparse
             name = parse_qs(urlparse(self.path).query).get("robot", [""])[0][:40]
@@ -731,13 +784,18 @@ details.bar summary { cursor:pointer; }
   <div id="wtCtl" class="sub" style="margin-top:8px">
     <select id="wtMode"><option value="samen">alle robots samen</option><option value="na_elkaar">robots na elkaar</option></select>
     <select id="wtSecs"><option>10</option><option selected>15</option><option>30</option></select> s
+    <select id="wtRate" title="Per robot: zo snel mogelijk, of een vaste snelheid zoals een camerastream (640x480 = ~3,4 Mbit/s)">
+      <option value="0">zo snel mogelijk</option><option value="2">2 Mbit/s</option><option value="5" selected>5 Mbit/s</option>
+      <option value="10">10 Mbit/s</option><option value="20">20 Mbit/s</option></select>
+    <label title="De monitor stuurt evenveel terug: de AP zendt dan zoals naar de laptop van de student (elk byte gaat twee keer over hetzelfde kanaal)">
+      <input type="checkbox" id="wtDown" checked> ↓ ook (zoals naar de laptop)</label>
     <button id="wtStart" data-icon="wifi">Start wifitest</button>
-    <span>aangevinkte robots, of alle robots als er niets aangevinkt is. Niet tijdens het rijden: de test vult de wifi.</span>
+    <span>aangevinkte robots, of alle robots als er niets aangevinkt is. Niet tijdens het rijden: de test belast de wifi.</span>
   </div>
   <div id="wtBody"></div></details>
 <div class="bar" style="margin-top:14px;display:block" id="libBox">
   <b>Kaartenbibliotheek</b> <span class="sub">- kaart + zones + routes. Een robot stuurt een kaart hierheen via
-  "meer... &gt; kaart X naar bibliotheek"; daarna kan ze naar andere robots. Bestaat de kaart daar al, dan wordt de oude
+  "kaart naar bibliotheek..." op zijn tegel; daarna kan ze naar andere robots. Bestaat de kaart daar al, dan wordt de oude
   eerst hernoemd naar &lt;naam&gt;_vorige.</span>
   <table style="width:100%;margin-top:8px;font-size:.85rem;border-collapse:collapse" id="libTable"></table>
   <div style="margin-top:8px"><label class="sub">Kaart van je laptop toevoegen (zip van "Exporteer" op nav.html):
@@ -1181,51 +1239,72 @@ function renderChannels(on) {
 // Wifitest: robots send data to the monitor for N s. "samen" vs "na elkaar"
 // shows how much they slow each other down (shared channel = shared airtime).
 function mbps(v) { return v == null ? "--" : String(v).replace(".", ",") + " Mbit/s"; }
+function wtLabel(h) {
+  return h.mode + ", " + (h.rate ? h.rate + " Mbit/s" : "max") + (h.down ? " ↑↓" : " ↑") + ", " + h.secs + " s";
+}
+var wtSel = null;   // id of the test shown in the table (null = newest)
 function renderWifitest(j) {
   var w = j.wifitest || {}, hist = w.history || [], cur = w.current, box = document.getElementById("wtBox");
   box.style.display = control || hist.length || cur ? "" : "none";
   document.getElementById("wtCtl").style.display = control ? "" : "none";
   document.getElementById("wtStart").disabled = !!w.busy;
   var last = hist[0];
-  document.getElementById("wtSum").innerHTML = "<b>Wifitest</b> " + (w.busy ? '<span class="y">bezig (' + cur.mode + ")...</span>"
-    : last ? '<span class="sub">laatste: ' + last.mode + ", totaal " + mbps(last.total) + "</span>" : '<span class="sub">nog geen test</span>');
-  // newest "samen" and "na elkaar" side by side, plus the running test
-  var samen = hist.filter(function (h) { return h.mode === "samen"; })[0],
-    alleen = hist.filter(function (h) { return h.mode === "na elkaar"; })[0];
-  var names = {};
-  [samen, alleen, w.busy ? cur : null].forEach(function (h) { if (h) Object.keys(h.mbps).forEach(function (n) { names[n] = 1; }); });
-  var max = 1;
-  Object.keys(names).forEach(function (n) {
-    [samen, alleen, w.busy ? cur : null].forEach(function (h) { if (h && h.mbps[n]) max = Math.max(max, h.mbps[n]); });
-  });
-  function bar(v, col) {
-    return v == null ? "--" : '<span style="display:inline-block;height:9px;border-radius:2px;vertical-align:middle;margin-right:6px;background:' + col +
-      ";width:" + Math.max(2, Math.round(v / max * 160)) + 'px"></span>' + mbps(v);
+  function verdict(h) {
+    return h.rate ? (h.reached === Object.keys(h.mbps).length ? '<span class="g">' : '<span class="y">') +
+      h.reached + "/" + Object.keys(h.mbps).length + " robots halen " + h.rate + " Mbit/s</span>" : "totaal " + mbps(h.total);
   }
-  function when(h) { return h ? new Date(h.t * 1000).toLocaleTimeString("nl-BE", { hour: "2-digit", minute: "2-digit" }) : ""; }
-  var rows = Object.keys(names).sort().map(function (n) {
-    return "<tr><td>" + esc(n) + "</td>" + (w.busy ? "<td>" + bar(cur.mbps[n], "var(--yellow)") + "</td>" : "") +
-      "<td>" + bar(alleen && alleen.mbps[n], "var(--green)") + "</td><td>" + bar(samen && samen.mbps[n], "var(--accent)") + "</td></tr>";
-  });
-  var html = rows.length ? '<table class="chtab"><tr><th>Robot</th>' + (w.busy ? "<th>Nu (" + esc(cur.mode) + ")</th>" : "") +
-    "<th>Alleen " + (alleen ? '<span class="sub">' + when(alleen) + "</span>" : "") + "</th><th>Samen " +
-    (samen ? '<span class="sub">' + when(samen) + "</span>" : "") + "</th></tr>" + rows.join("") +
-    "<tr><td><b>Totaal</b></td>" + (w.busy ? "<td></td>" : "") + "<td>--</td><td><b>" + (samen ? mbps(samen.total) : "--") + "</b></td></tr></table>" : "";
-  if (hist.length) html += '<div class="sub" style="margin-top:10px">Vorige tests: ' + hist.slice(0, 8).map(function (h) {
-    return when(h) + " " + h.mode + " (" + Object.keys(h.mbps).length + " robots, " + h.secs + " s): totaal " + mbps(h.total);
+  document.getElementById("wtSum").innerHTML = "<b>Wifitest</b> " + (w.busy ? '<span class="y">bezig (' + esc(wtLabel(cur)) + ")...</span>"
+    : last ? '<span class="sub">laatste: ' + esc(wtLabel(last)) + " - </span>" + verdict(last) : '<span class="sub">nog geen test</span>');
+  var h = w.busy ? cur : hist.filter(function (x) { return x.id === wtSel; })[0] || last;
+  // reference: the newest "na elkaar" test at full speed = what each robot gets alone
+  var alone = hist.filter(function (x) { return x.mode === "na elkaar" && !x.rate; })[0];
+  var html = "";
+  if (h) {
+    var names = Object.keys(h.mbps).sort(), max = 1, need = h.rate ? 0.9 * h.rate : 0;
+    names.forEach(function (n) {
+      max = Math.max(max, h.mbps[n] || 0, (h.mbps_down || {})[n] || 0, h.rate ? 0 : ((alone || {}).mbps || {})[n] || 0, h.rate * 1.2);
+    });
+    var bar = function (v, col) {
+      return v == null ? "--" : '<span style="display:inline-block;height:9px;border-radius:2px;vertical-align:middle;margin-right:6px;background:' + col +
+        ";width:" + Math.max(2, Math.round(v / max * 150)) + 'px"></span>' + mbps(v);
+    };
+    var rows = names.map(function (n) {
+      var up = h.mbps[n], dn = (h.mbps_down || {})[n], ok = (up || 0) >= need && (!h.down || (dn || 0) >= need);
+      return "<tr><td>" + esc(n) + "</td><td>" + bar(up, "var(--accent)") + "</td>" + (h.down ? "<td>" + bar(dn, "var(--green)") + "</td>" : "") +
+        (h.rate ? "<td>" + (!h.done && up == null ? "" : ok ? '<span class="g">✓</span>' : '<span class="y">✗</span>') + "</td>" : "") +
+        (!h.rate && alone && alone !== h ? '<td class="sub">' + mbps(alone.mbps[n]) + "</td>" : "") + "</tr>";
+    });
+    html = '<div class="sub" style="margin-top:8px">' + esc(wtLabel(h)) + " - " + new Date(h.t * 1000).toLocaleTimeString("nl-BE") +
+      (h.done ? "" : " (bezig)") + "</div>" +
+      '<table class="chtab"><tr><th>Robot</th><th>↑ robot → AP</th>' + (h.down ? "<th>↓ AP → robot</th>" : "") +
+      (h.rate ? "<th>gehaald</th>" : "") + (!h.rate && alone && alone !== h ? "<th>alleen</th>" : "") + "</tr>" + rows.join("") +
+      "<tr><td><b>Totaal</b></td><td><b>" + mbps(h.total) + "</b></td>" + (h.down ? "<td><b>" + mbps(h.total_down) + "</b></td>" : "") +
+      (h.rate ? "<td>" + (h.reached != null ? h.reached + "/" + names.length : "") + "</td>" : "") + "</tr></table>";
+  }
+  if (hist.length) html += '<div class="sub" style="margin-top:10px">Vorige tests (klik om te tonen): ' + hist.slice(0, 10).map(function (x) {
+    return '<a href="#" data-wt="' + x.id + '"' + (h && x.id === h.id ? ' style="font-weight:700"' : "") + ">" +
+      new Date(x.t * 1000).toLocaleTimeString("nl-BE", { hour: "2-digit", minute: "2-digit" }) + " " + esc(wtLabel(x)) + "</a>";
   }).join(" · ") + "</div>";
-  html += '<div class="sub" style="margin-top:6px">Gemeten wat er bij de monitor-RPi aankomt (robot → AP → kabel). ' +
-    "Alleen = elke robot apart; samen = allemaal tegelijk. Zitten ze op aparte kanalen, dan is samen per robot ongeveer even snel als alleen; " +
-    "delen ze een kanaal, dan zakt elke robot weg. Logboek: monitor/wifitest_log.jsonl.</div>";
+  html += '<div class="sub" style="margin-top:6px">Gemeten bij de monitor-RPi (robot → AP → kabel; met ↓ ook terug). ' +
+    "Met een vaste snelheid: haalt elke robot die tegelijk (✓ = minstens 90 %)? Een camerastream 640x480 is ~3,4 Mbit/s, " +
+    "met Lichtblick en kaart samen ~5-10 Mbit/s per groep. ↓ ook = de AP zendt evenveel, zoals naar de laptop van de student. " +
+    "Logboek: monitor/wifitest_log.jsonl.</div>";
   document.getElementById("wtBody").innerHTML = html;
 }
+document.addEventListener("click", function (e) {
+  var a = e.target.closest("[data-wt]");
+  if (a) { e.preventDefault(); wtSel = Number(a.dataset.wt); render(); }
+});
 document.getElementById("wtStart").addEventListener("click", function () {
   var names = selectedNames();
   if (!names.length) names = lastRobots.filter(function (r) { return r.listening; }).map(function (r) { return r.robot; });
   if (!names.length) { alert("Geen enkele robot luistert naar de monitor."); return; }
-  var mode = document.getElementById("wtMode").value, secs = Number(document.getElementById("wtSecs").value);
-  if (!confirm("Wifitest (" + (mode === "samen" ? "samen" : "na elkaar") + ", " + secs + " s) met " + names.length + " robot(s)?")) return;
-  post("/api/wifitest", { robots: names, mode: mode, secs: secs });
+  var mode = document.getElementById("wtMode").value, secs = Number(document.getElementById("wtSecs").value),
+    rate = Number(document.getElementById("wtRate").value), down = document.getElementById("wtDown").checked;
+  if (!confirm("Wifitest (" + (mode === "samen" ? "samen" : "na elkaar") + ", " + (rate ? rate + " Mbit/s" : "zo snel mogelijk") +
+               (down ? ", ook ↓" : "") + ", " + secs + " s) met " + names.length + " robot(s)?")) return;
+  wtSel = null;
+  post("/api/wifitest", { robots: names, mode: mode, secs: secs, rate: rate, down: down });
 });
 var wtBox = document.getElementById("wtBox");
 try { wtBox.open = localStorage.getItem("tbmonWt") === "1"; } catch (e) {}
