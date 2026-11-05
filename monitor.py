@@ -743,6 +743,17 @@ function health(s, msgs, warns, tips) {
     errs.forEach(function (e) { tips.push(e.level + " " + e.node + ": " + e.msg); });
   }
 }
+// Linux load average (1 min) of the whole Pi, as a share of its cores: load 4
+// on the 4 cores of a Pi 5 = all busy; above that processes wait (Nav2 slows
+// down). Per-core usage (%) in the tooltip.
+function cpuLoad(s) {
+  if (s.cpu_load_1min == null) return "--";
+  var n = s.cpu_count || 4, pct = Math.round(s.cpu_load_1min / n * 100), c = pct > 100 ? "r" : pct > 75 ? "y" : "";
+  var cores = (s.cpu_percent_per_core || []).map(function (v, i) { return "kern " + i + ": " + Math.round(v) + " %"; });
+  return '<span class="' + c + '" title="' + esc("Load " + s.cpu_load_1min + " (1 min)" + (s.cpu_load_5min != null ? ", " + s.cpu_load_5min + " (5 min)" : "") +
+    "\n" + n + " = alle " + n + " kernen vol" + (cores.length ? "\n" + cores.join("\n") : "")) + '">' +
+    String(s.cpu_load_1min).replace(".", ",") + " load (" + pct + " % van " + n + " kernen)</span>";
+}
 // Traffic on the robot's wifi (wlan0), in kbit/s from system_info_node: camera
 // streams, Lichtblick and rosbridge add up; a busy link makes the pages slow.
 function rate(k) { return k < 1000 ? Math.round(k) + " kbit/s" : (k / 1000).toFixed(1).replace(".", ",") + " Mbit/s"; }
@@ -811,7 +822,7 @@ function tile(r, now, common) {
     (online ? '<div class="kv">' +
       "<span>Toestand</span><span class=\"" + st[1] + "\">" + st[0] + "</span>" +
       "<span>Batterij</span><span class=\"" + b[1] + "\">" + b[0] + "</span>" +
-      "<span>CPU</span><span>" + (s.cpu_load_1min != null ? s.cpu_load_1min : "--") + ' load, <span class="' + tc + '">' + temp + "</span></span>" +
+      "<span>CPU</span><span>" + cpuLoad(s) + ' · <span class="' + tc + '">' + temp + "</span></span>" +
       "<span>Wifi</span><span>" + (s.wifi_signal_dbm != null ? s.wifi_signal_dbm + " dBm" : "--") +
         (s.wifi_band ? '<br><span title="' + s.wifi_freq_mhz + ' MHz">' + esc(s.wifi_band) + " kanaal " + s.wifi_channel +
           (s.wifi_width_mhz ? " · " + s.wifi_width_mhz + " MHz" : "") + "</span>" + channelMark(channelCheck(r)) : "") + "</span>" +
