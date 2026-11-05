@@ -654,6 +654,16 @@ function health(s, msgs, warns, tips) {
     errs.forEach(function (e) { tips.push(e.level + " " + e.node + ": " + e.msg); });
   }
 }
+// The robot itself compares its image (Docker Hub) and setup repo (GitHub) with
+// the newest ones, when it has internet; null = not checked (yet).
+function updateAvailable(u) { return !!(u && (u.image_behind || u.setup_behind)); }
+function softwareState(u) {
+  if (updateAvailable(u))
+    return '<br><span class="y">update beschikbaar (' + [u.image_behind && "image", u.setup_behind && "setup"]
+      .filter(Boolean).join(" + ") + ")</span>";
+  if (u && u.image_behind === false && u.setup_behind !== true) return ' <span class="g">nieuwste</span>';
+  return u && u.error ? '<br><span class="sub" title="' + esc(u.error) + '">niet nagekeken</span>' : "";
+}
 function tile(r, now, common) {
   var d = r.data || {}, s = d.status || {}, l = d.launch || {};
   var age = r.seen ? now - r.seen : null, online = age != null && age < 20;
@@ -666,7 +676,6 @@ function tile(r, now, common) {
     if (s.cpu_temp_c > 80) msgs.push("CPU " + Math.round(s.cpu_temp_c) + " °C");
     if (s.throttled & 1) msgs.push("Onderspanning van de Pi (voeding/batterij)");
     if (b[1] === "y") warns.push("batterij bijna leeg");
-    if (s.updates && (s.updates.setup_behind || s.updates.image_behind)) warns.push("update beschikbaar");
     if (s.wifi_signal_dbm != null && s.wifi_signal_dbm < -72) warns.push("zwakke wifi");
     var chg = l.changes || [];
     if (chg.length) warns.push(chg.length + " aanpassing(en) t.o.v. de standaard");
@@ -694,7 +703,8 @@ function tile(r, now, common) {
       "<span>Kaart</span><span>" + esc(l.map_running || "--") + "</span>" +
       "<span>USB / lidar</span><span>" + (l.usb_power === "off" ? "uit (spaarstand)" : l.usb_power === "on" ? "aan" : "--") +
         (s.lidar ? ", " + s.lidar.hours.toFixed(0) + " draaiuren" : "") + "</span>" +
-      "<span>Software</span><span>" + esc(s.image_version || "--") + "</span>" +
+      "<span>Software</span><span>" + esc(s.image_version || "--") + softwareState(s.updates) +
+        (d.setup_commit ? '<br><span class="sub">setup ' + esc(d.setup_commit) + "</span>" : "") + "</span>" +
       "<span>Uptime</span><span>" + (s.uptime_seconds ? ago(s.uptime_seconds) : "--") + "</span>" +
       "</div><div class=\"chips\">" + chips + "</div>" +
       msgs.map(function (m) { return '<div class="alert">' + esc(m) + "</div>"; }).join("") +
@@ -722,6 +732,7 @@ function refresh() {
     if (document.activeElement && document.activeElement.tagName === "SELECT") return;   // don't close an open menu
     // most common software version of the online robots (whole class on one version)
     var on = rs.filter(function (r) { return r.seen && j.now - r.seen < 20; });
+    var upd = on.filter(function (r) { return updateAvailable(((r.data || {}).status || {}).updates); }).length;
     var count = {}, common = "";
     on.forEach(function (r) { var v = (((r.data || {}).status || {}).image_version || "").split(" ")[0]; if (v) count[v] = (count[v] || 0) + 1; });
     Object.keys(count).forEach(function (v) { if (!common || count[v] > count[common]) common = v; });
@@ -729,7 +740,8 @@ function refresh() {
     document.getElementById("grid").innerHTML = rs.map(function (r) { return tile(r, j.now, common); }).join("");
     var bad = document.querySelectorAll(".tile.bad").length, warn = document.querySelectorAll(".tile.warn").length;
     document.getElementById("summary").textContent = on.length + " van " + rs.length + " robots online" +
-      (bad ? ", " + bad + " met een probleem" : "") + (warn ? ", " + warn + " met aandacht" : "") + " - " + new Date().toLocaleTimeString("nl-BE");
+      (bad ? ", " + bad + " met een probleem" : "") + (warn ? ", " + warn + " met aandacht" : "") +
+      (upd ? ", " + upd + " met een update beschikbaar" : "") + " - " + new Date().toLocaleTimeString("nl-BE");
   }).catch(function () { document.getElementById("summary").textContent = "monitor niet bereikbaar"; });
 }
 function refreshLib() {
