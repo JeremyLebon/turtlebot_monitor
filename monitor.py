@@ -232,6 +232,11 @@ login_fails = {}     # ip -> [wrong PINs in a row, locked until]
 
 
 WIFI_PLAN_CSV = os.path.join(HERE, "wifi_kanalen.csv")
+# Monitor on its own RPi (install_rpi.sh): the container asks the host to shut
+# down or reboot through a file in this folder; a systemd path unit on the RPi
+# acts on it. POWER_MARK exists only there, so the buttons show only there.
+POWER_MARK = os.path.join(HERE, ".rpi_power")
+POWER_REQUEST = os.path.join(HERE, "power_request")
 
 
 def wifi_plan():
@@ -357,6 +362,18 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, TypeError, OSError, KeyError, StopIteration, zipfile.BadZipFile) as exc:
                 return self._send(400, json.dumps({"error": str(exc) or "geen geldige kaartbundel"}), "application/json")
             return self._send(200, json.dumps({"ok": True}), "application/json")
+        if self.path == "/api/rpi_power":   # shut down / reboot the monitor RPi itself
+            if not self._may_control():
+                return self._send(403, json.dumps({"error": "knoppen enkel na Docent aanmelden"}), "application/json")
+            try:
+                action = self._read_json()["action"]
+            except (ValueError, KeyError, TypeError):
+                return self._send(400, "bad request", "text/plain")
+            if action not in ("poweroff", "reboot") or not os.path.exists(POWER_MARK):
+                return self._send(400, json.dumps({"error": "kan niet op dit toestel"}), "application/json")
+            with open(POWER_REQUEST, "w") as f:
+                f.write(action + "\n")
+            return self._send(200, json.dumps({"ok": True}), "application/json")
         if self.path in ("/api/update_all", "/api/update_all/cancel"):
             if not self._may_control():
                 return self._send(403, json.dumps({"error": "knoppen enkel vanaf de laptop zelf (localhost)"}),
@@ -461,7 +478,8 @@ class Handler(BaseHTTPRequestHandler):
                                                "session": self._session() is not None,
                                                "pin_set": bool(load_pin()),
                                                "view_only": VIEW_ONLY,
-                                               "wifi_plan": wifi_plan()}),
+                                               "wifi_plan": wifi_plan(),
+                                               "rpi_power": os.path.exists(POWER_MARK)}),
                               "application/json")
         if self.path.split("?")[0] in ("/", "/index.html"):   # also "/?kiosk" (kiosk.sh)
             return self._send(200, PAGE, "text/html; charset=utf-8")
@@ -528,6 +546,8 @@ button:disabled, select:disabled { opacity:.4; cursor:default; }
   <button data-all="shutdown" title="Alle robots uitschakelen (einde les)">Uitschakelen</button>
   <button id="pinAll" title="Docenten-PIN voor Beheer op de statuspagina, voor alle robots die luisteren, en voor Docent aanmelden op deze monitor (enkel de hash gaat naar de robots)">Docenten-PIN</button>
   <span class="sub" id="ctrlInfo"></span>
+  <span id="rpiPower" style="display:none;margin-left:auto">Monitor-RPi:
+    <button data-power="reboot">Herstarten</button> <button data-power="poweroff">Afsluiten</button></span>
 </div>
 <div class="bar" id="updBox" style="display:none"></div>
 <div class="bar" id="chanBox" style="display:none"></div>
@@ -619,6 +639,15 @@ document.getElementById("selPick").addEventListener("change", function (e) {
       selected[r.robot] = true;
   });
   render();
+});
+document.querySelectorAll("[data-power]").forEach(function (b) {
+  b.addEventListener("click", function () {
+    var off = b.dataset.power === "poweroff";
+    if (!confirm(off ? "De monitor-RPi afsluiten?\nDe robots blijven werken; de monitor is weg tot je de RPi opnieuw aanzet "
+                     + "(stekker uit en in, of de aan/uit-knop van de RPi)."
+                     : "De monitor-RPi herstarten? (ongeveer 1 minuut weg)")) return;
+    post("/api/rpi_power", { action: b.dataset.power });
+  });
 });
 document.getElementById("openAll").addEventListener("click", function () {
   var anyClosed = lastRobots.some(function (r) { return !openTiles[r.robot]; });
@@ -834,6 +863,7 @@ function render() {
   updBtn.disabled = !control || busy || !nSel;
   updBtn.textContent = nSel ? nSel + " robot(s) bijwerken" : "Bijwerken (vink robots aan)";
   document.getElementById("selPick").disabled = !control;
+  document.getElementById("rpiPower").style.display = control && j.rpi_power ? "" : "none";
   document.querySelectorAll("[data-all]").forEach(function (b) { b.disabled = !control; });
   var listening = rs.filter(function (r) { return r.listening; }).length;
   document.getElementById("allBar").style.display = j.view_only ? "none" : "";

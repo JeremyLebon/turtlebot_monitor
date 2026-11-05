@@ -7,7 +7,7 @@
 #   bash ~/turtlebot_monitor/monitor/install_rpi.sh --geen-scherm
 #
 # Doet: Docker installeren, de monitor-container starten (start daarna vanzelf
-# bij elke opstart), en met een desktop: automatisch aanmelden, scherm niet
+# bij elke opstart), knoppen om de RPi te herstarten/af te sluiten, en met een desktop: automatisch aanmelden, scherm niet
 # laten uitgaan en de monitorpagina schermvullend openen bij het opstarten.
 # Opnieuw uitvoeren mag (bv. om --knoppen aan of uit te zetten).
 set -euo pipefail
@@ -41,7 +41,31 @@ echo "== Monitor starten"
 cd "$HERE"
 sudo docker compose up -d
 
-# 3. Scherm: pagina schermvullend bij opstart
+# 3. Knoppen "Monitor-RPi: Herstarten / Afsluiten": de container schrijft
+#    power_request in deze map, een systemd path unit voert het uit op de RPi.
+echo "== Knoppen herstarten/afsluiten"
+sudo tee /etc/systemd/system/turtlebot-monitor-power.path >/dev/null <<EOF
+[Unit]
+Description=TurtleBot Monitor: herstarten/afsluiten vanaf de monitorpagina
+[Path]
+PathExists=$HERE/power_request
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo tee /etc/systemd/system/turtlebot-monitor-power.service >/dev/null <<EOF
+[Unit]
+Description=TurtleBot Monitor: herstarten/afsluiten uitvoeren
+[Service]
+Type=oneshot
+# \$\$ = a literal \$ for the shell (systemd expands \$VAR itself)
+ExecStart=/bin/sh -c 'a=\$\$(cat "$HERE/power_request"); rm -f "$HERE/power_request"; case "\$\$a" in reboot) systemctl reboot ;; poweroff) systemctl poweroff ;; esac'
+EOF
+rm -f "$HERE/power_request"
+touch "$HERE/.rpi_power"
+sudo systemctl daemon-reload
+sudo systemctl enable --now turtlebot-monitor-power.path
+
+# 4. Scherm: pagina schermvullend bij opstart
 AUTOSTART="$HOME/.config/autostart/turtlebot-monitor.desktop"
 if [ "$KIOSK" = none ]; then
   rm -f "$AUTOSTART"

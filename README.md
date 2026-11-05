@@ -158,6 +158,13 @@ ssh -L 8091:localhost:8091 <gebruiker>@<ip-rpi>
 
 en dan http://localhost:8091 op de laptop (zolang de tunnel open staat).
 
+**Herstarten / afsluiten.** Na Docent aanmelden staan rechts in de balk de
+knoppen *Monitor-RPi: Herstarten / Afsluiten*. De container schrijft
+`monitor/power_request`; de systemd path unit `turtlebot-monitor-power`
+(geïnstalleerd door `install_rpi.sh`) voert het uit. Na afsluiten: stekker uit
+en in, of de aan/uit-knop van de RPi 5. Op een laptop verschijnen de knoppen
+niet (geen `monitor/.rpi_power`).
+
 **Bijwerken.** Kopieer `monitor/` en `turtlebot_config.csv` opnieuw (stap 2;
 `monitor/maps/` op de RPi is de kaartenbibliotheek - niet overschrijven met een
 oudere versie) en op de RPi: `cd ~/turtlebot_monitor/monitor && docker compose restart`.
