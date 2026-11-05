@@ -92,6 +92,15 @@ plus de firewallregel uit A (`firewall_regel.ps1`). Starten in WSL:
   zendtijd. Op de tegel: ✓ of ✗ achter het kanaal. Het plan (kanaal +
   breedte per robot) staat in `monitor/wifi_kanalen.csv` (uit
   `docs/ap-migration.md`); pas het aan de tafelschikking in het lokaal aan.
+- **Omgeving** (enkel op de monitor-RPi): de RPi hangt aan de kabel, dus zijn
+  wifi is vrij en scant elke minuut alle netwerken in de buurt
+  (`turtlebot-monitor-wifiscan.timer`, `install_rpi.sh` stap 3b, schrijft
+  `monitor/wifi_scan.txt`). In *Wifikanalen*: per TB-AP het kanaal en de breedte
+  op 5 en 2.4 GHz tegen het plan (ook voor robots die nog niets melden), hoeveel
+  eigen en andere netwerken op elk gepland kanaal zitten, en een spectrum met
+  één rij per zender (grijs = niet van ons: eduroam, gsm-hotspots, ...). Het
+  signaal is wat de RPi ontvangt; de drukte bij een robot kan anders zijn. Een
+  scan toont welke netwerken er zijn, niet hoeveel zendtijd ze gebruiken.
 - Rijden kan niet via de monitor (vertraging, geen zicht op de robot) - daarvoor
   de statuspagina op de wifi van de robot of de joystick.
 

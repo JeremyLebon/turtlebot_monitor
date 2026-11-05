@@ -2,3 +2,5 @@ maps/
 docent_pin
 power_request
 .rpi_power
+wifi_scan.txt
+wifi_scan.tmp

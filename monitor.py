@@ -232,6 +232,7 @@ login_fails = {}     # ip -> [wrong PINs in a row, locked until]
 
 
 WIFI_PLAN_CSV = os.path.join(HERE, "wifi_kanalen.csv")
+WIFI_SCAN = os.path.join(HERE, "wifi_scan.txt")
 # Monitor on its own RPi (install_rpi.sh): the container asks the host to shut
 # down or reboot through a file in this folder; a systemd path unit on the RPi
 # acts on it. POWER_MARK exists only there, so the buttons show only there.
@@ -249,6 +250,50 @@ def wifi_plan():
                     for r in csv.DictReader(f)}
     except (OSError, KeyError, ValueError):
         return {}
+
+
+def _center_mhz(ch, freq, width):
+    """Centre of an AP's channel block from its primary channel (the scan
+    gives only the primary): 5 GHz blocks are aligned (36-48 = one 80 MHz
+    block); 2.4 GHz 40 MHz is a guess (low channels bond upwards)."""
+    if width <= 20:
+        return freq
+    if freq > 5000:
+        base = 149 if ch >= 149 else 36
+        start = base + (ch - base) // (width // 5) * (width // 5)
+        return 5000 + 5 * start + width // 2 - 10
+    return freq + 10 if ch <= 7 else freq - 10
+
+
+def wifi_scan():
+    """Networks around the monitor RPi: its free wlan0 scans every minute
+    (install_rpi.sh, systemd timer -> wifi_scan.txt). One entry per radio:
+    the school APs send 4-5 SSIDs (eduroam, VIVES-GUEST, ...) per radio."""
+    try:
+        age = time.time() - os.path.getmtime(WIFI_SCAN)
+        if age > 300:
+            return None
+        with open(WIFI_SCAN) as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    radios = {}
+    for line in lines:
+        p = [x.replace("\\:", ":") for x in re.split(r"(?<!\\):", line)]
+        try:
+            ssid, bssid, ch, freq = p[0], p[1], int(p[2]), int(p[3].split()[0])
+            width, signal = int(p[4].split()[0]), int(p[5])
+        except (IndexError, ValueError):
+            continue
+        # same radio = same BSSID except the last digit; our own APs never merge
+        # (TB-AP-04 and -07 differ only in that digit)
+        key = (ssid if ssid.startswith("TB-AP-") else bssid[:-1], ch)
+        r = radios.setdefault(key, {"ssids": [], "ch": ch, "freq": freq, "width": width,
+                                                 "center": _center_mhz(ch, freq, width), "signal": signal})
+        if ssid and ssid not in r["ssids"]:
+            r["ssids"].append(ssid)
+        r["signal"] = max(r["signal"], signal)
+    return {"age": round(age), "radios": sorted(radios.values(), key=lambda r: (r["freq"], -r["signal"]))}
 
 
 def expected_robots():
@@ -480,6 +525,7 @@ class Handler(BaseHTTPRequestHandler):
                                                "pin_set": bool(load_pin()),
                                                "view_only": VIEW_ONLY,
                                                "wifi_plan": wifi_plan(),
+                                               "wifi_scan": wifi_scan(),
                                                "rpi_power": os.path.exists(POWER_MARK)}),
                               "application/json")
         if self.path.split("?")[0] in ("/", "/index.html"):   # also "/?kiosk" (kiosk.sh)
@@ -920,11 +966,12 @@ function channelMark(c) {
 // Spectrum: every robot's channel as a block (centre ± width/2) on the
 // frequency axis, one row per robot - overlapping blocks share airtime.
 // Last year's lab: all robots on one network was a disaster.
-function spectrum(list, band) {
+function spectrum(list, band, opt) {
+  opt = opt || {};
   var lo = band === "5 GHz" ? 5170 : 2401, hi = band === "5 GHz" ? 5250 : 2483, step = band === "5 GHz" ? 20 : 5;
   list.forEach(function (x) { lo = Math.min(lo, x.c - x.w / 2); hi = Math.max(hi, x.c + x.w / 2); });
   lo -= step / 2; hi += step / 2;   // room for the outer blocks and labels
-  var W = 760, L = 40, R = 10, rowH = 18, top = 6, H = top + list.length * rowH + 30;
+  var W = 760, L = opt.L || 40, R = 10, rowH = 18, top = 6, H = top + list.length * rowH + 30;
   var X = function (f) { return L + (f - lo) / (hi - lo) * (W - L - R); };
   var g = "";
   // channel grid: 5 GHz every 20 MHz (36, 40, ...), 2.4 GHz channels 1, 6, 11
@@ -937,12 +984,13 @@ function spectrum(list, band) {
       '<text x="' + X(f) + '" y="' + (H - 8) + '" text-anchor="middle">' + ch + "</text>";
   });
   list.forEach(function (x, i) {
-    var y = top + i * rowH, col = x.ok === false ? "var(--yellow)" : x.ok ? "var(--green)" : "var(--accent)";
+    var y = top + i * rowH, col = x.other ? "var(--muted)" : x.ok === false ? "var(--yellow)" : x.ok ? "var(--green)" : "var(--accent)";
     g += '<rect x="' + X(x.c - x.w / 2) + '" y="' + (y + 2) + '" width="' + Math.max(2, X(x.c + x.w / 2) - X(x.c - x.w / 2)) +
-      '" height="' + (rowH - 5) + '" rx="3" fill="' + col + '" fill-opacity=".75"><title>' + esc(x.name + ": kanaal " + x.ch + ", " + x.w + " MHz") +
+      '" height="' + (rowH - 5) + '" rx="3" fill="' + col + '" fill-opacity="' + (x.other ? ".45" : ".75") + '"><title>' +
+      esc(x.name + ": kanaal " + x.ch + ", " + x.w + " MHz" + (x.signal != null ? ", signaal " + x.signal + " %" : "")) +
       '</title></rect><text x="' + (L - 6) + '" y="' + (y + rowH - 5) + '" text-anchor="end">' + esc(x.label) + "</text>";
   });
-  return '<div class="sub" style="margin-top:8px">' + band + " - kanaal (onderaan), één rij per robot</div>" +
+  return '<div class="sub" style="margin-top:8px">' + band + " - kanaal (onderaan), " + (opt.rows || "één rij per robot") + "</div>" +
     '<svg class="spec" viewBox="0 0 ' + W + " " + H + '">' + g + "</svg>";
 }
 function renderChannels(on) {
@@ -958,18 +1006,77 @@ function renderChannels(on) {
       (s.wifi_width_mhz ? s.wifi_width_mhz + " MHz" : "?") + "</td><td>" + (c ? c.plan["5"] + " · " + c.plan.width + " MHz" : "--") +
       "</td><td>" + (c ? (c.ok ? '<span class="g">✓ volgens plan</span>' : '<span class="y">✗ ' + esc(c.text) + "</span>") : "") + "</td></tr>");
   });
-  var box = document.getElementById("chanBox");
-  box.style.display = rows.length ? "" : "none";
-  if (!rows.length) return;
-  document.getElementById("chanSum").innerHTML = "<b>Wifikanalen</b> " + (bad
-    ? '<span class="y">' + bad + " robot(s) niet volgens plan</span>" : '<span class="g">alles volgens plan</span>') +
-    ' <span class="sub">(' + rows.length + " robot(s) gemeld; klik voor de grafiek)</span>";
-  document.getElementById("chanBody").innerHTML =
+  var scan = renderScan((lastJ || {}).wifi_scan), box = document.getElementById("chanBox");
+  box.style.display = rows.length || scan ? "" : "none";
+  if (!rows.length && !scan) return;
+  var sum = [];
+  if (rows.length) sum.push(bad ? '<span class="y">' + bad + " robot(s) niet volgens plan</span>" : '<span class="g">robots volgens plan</span>');
+  if (scan) sum.push(scan.bad ? '<span class="y">' + scan.bad + " AP-instelling(en) niet volgens plan</span>"
+    : '<span class="g">AP\'s volgens plan</span>');
+  document.getElementById("chanSum").innerHTML = "<b>Wifikanalen</b> " + sum.join(" · ") +
+    ' <span class="sub">(' + rows.length + " robot(s) gemeld" + (scan ? ", " + scan.n + " netwerken in de buurt" : "") +
+    "; klik voor de grafiek)</span>";
+  document.getElementById("chanBody").innerHTML = (rows.length ?
     '<table class="chtab"><tr><th>Robot</th><th>Band</th><th>Kanaal</th><th>Breedte</th><th>Gepland</th><th></th></tr>' +
     rows.join("") + "</table>" +
-    Object.keys(bands).sort().reverse().map(function (b) { return spectrum(bands[b], b); }).join("") +
+    Object.keys(bands).sort().reverse().map(function (b) { return spectrum(bands[b], b); }).join("") : "") +
+    (scan ? scan.html : "") +
     '<div class="sub" style="margin-top:6px">Plan: monitor/wifi_kanalen.csv. Overlappende blokken delen de zendtijd; ' +
     "20 MHz-kanalen 36/40/44/48 overlappen niet, 80 MHz neemt alle vier in.</div>";
+}
+// Wifi around the monitor RPi (its free wlan0 scans every minute): the TB-AP
+// settings checked against the plan, how busy each planned channel is, and
+// every radio as a block (grey = not ours: eduroam, phones, ...).
+var LAB_SSIDS = ["Wifi_turtlebots"];   // our switch network: counted as ours, not checked
+function renderScan(sc) {
+  if (!sc || !sc.radios || !sc.radios.length) return null;
+  var plan = (lastJ || {}).wifi_plan || {}, aps = {}, bad = 0, bands = { "5 GHz": [], "2.4 GHz": [] };
+  sc.radios.forEach(function (r) {
+    var b = r.freq > 5000 ? "5 GHz" : "2.4 GHz", m = /^TB-AP-(\d+)$/.exec(r.ssids[0] || ""), x = {
+      name: r.ssids.join(", ") || "(verborgen)", ch: r.ch, w: r.width, c: r.center, signal: r.signal };
+    if (LAB_SSIDS.indexOf(r.ssids[0]) >= 0) x.label = r.ssids[0].slice(0, 15);   // lab network: ours, no plan
+    else if (m) {
+      var nr = String(Number(m[1])), p = plan[nr], want = p ? (b === "5 GHz" ? p["5"] : p["2.4"]) : null,
+        ww = p ? (b === "5 GHz" ? p.width : 20) : null;
+      x.label = "AP " + m[1]; x.ok = p ? r.ch === want && r.width === ww : null;
+      if (x.ok === false) bad++;
+      (aps[m[1]] = aps[m[1]] || {})[b] = { r: r, ok: x.ok, want: want, ww: ww };
+    } else {
+      x.other = true;
+      x.label = (r.ssids[0] || "(verborgen)").slice(0, 12) + (r.ssids.length > 1 ? " +" + (r.ssids.length - 1) : "");
+    }
+    bands[b].push(x);
+  });
+  function cell(a) {
+    if (!a) return "<td>--</td>";
+    var t = "kanaal " + a.r.ch + " · " + a.r.width + " MHz";
+    return "<td>" + (a.ok === false ? '<span class="y" title="gepland: kanaal ' + a.want + " · " + a.ww + ' MHz">✗ ' + t + "</span>"
+      : a.ok ? '<span class="g">✓</span> ' + t : t) + ' <span class="sub">' + a.r.signal + " %</span></td>";
+  }
+  var aprows = Object.keys(aps).sort().map(function (k) {
+    return "<tr><td>TB-AP-" + k + "</td>" + cell(aps[k]["5 GHz"]) + cell(aps[k]["2.4 GHz"]) + "</tr>";
+  });
+  // busy-ness of each planned channel: radios whose block covers it
+  function busy(b, chans) {
+    return chans.map(function (ch) {
+      var f = b === "5 GHz" ? 5000 + 5 * ch : 2407 + 5 * ch, ours = 0, other = 0, best = 0;
+      bands[b].forEach(function (x) {
+        if (Math.abs(x.c - f) >= x.w / 2 + (b === "5 GHz" ? 0 : 10)) return;   // 2.4 GHz: 20 MHz channels 5 MHz apart overlap
+        if (x.other) { other++; best = Math.max(best, x.signal); } else ours++;
+      });
+      return "<tr><td>" + b + " kanaal " + ch + "</td><td>" + ours + "</td><td" + (best >= 60 ? ' class="y"' : "") + ">" + other +
+        (other ? ' <span class="sub">(sterkste ' + best + " %)</span>" : "") + "</td></tr>";
+    }).join("");
+  }
+  var html = '<div style="margin-top:14px"><b>Omgeving</b> <span class="sub">scan door de monitor-RPi, ' + sc.age +
+    " s geleden; signaal 0-100 % zoals de RPi het ontvangt</span></div>" +
+    (aprows.length ? '<table class="chtab"><tr><th>AP</th><th>5 GHz</th><th>2.4 GHz</th></tr>' + aprows.join("") + "</table>" : "") +
+    '<table class="chtab" style="margin-top:8px"><tr><th>Gepland kanaal</th><th>Eigen netwerken erop</th><th>Andere netwerken erop</th></tr>' +
+    busy("5 GHz", [36, 40, 44, 48]) + busy("2.4 GHz", [1, 6, 11]) + "</table>" +
+    ["5 GHz", "2.4 GHz"].map(function (b) {
+      return bands[b].length ? spectrum(bands[b], b, { L: 110, rows: "één rij per zender (grijs = niet van ons)" }) : "";
+    }).join("");
+  return { html: html, bad: bad, n: sc.radios.length };
 }
 var chanBox = document.getElementById("chanBox");
 try { chanBox.open = localStorage.getItem("tbmonChan") === "1"; } catch (e) {}

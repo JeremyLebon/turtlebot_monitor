@@ -65,6 +65,30 @@ touch "$HERE/.rpi_power"
 sudo systemctl daemon-reload
 sudo systemctl enable --now turtlebot-monitor-power.path
 
+# 3b. Wifi-omgeving: de vrije wlan0 van de RPi (die hangt aan de kabel) scant
+#     elke minuut; de monitor toont alle netwerken in de buurt (Wifikanalen).
+if nmcli -t -f DEVICE,TYPE dev 2>/dev/null | grep -q ':wifi$'; then
+  echo "== Wifi-scan elke minuut"
+  sudo tee /etc/systemd/system/turtlebot-monitor-wifiscan.service >/dev/null <<EOF
+[Unit]
+Description=TurtleBot Monitor: wifinetwerken in de buurt scannen
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'nmcli -t -f SSID,BSSID,CHAN,FREQ,BANDWIDTH,SIGNAL dev wifi list --rescan yes > "$HERE/wifi_scan.tmp" && mv "$HERE/wifi_scan.tmp" "$HERE/wifi_scan.txt"'
+EOF
+  sudo tee /etc/systemd/system/turtlebot-monitor-wifiscan.timer >/dev/null <<EOF
+[Unit]
+Description=TurtleBot Monitor: wifi-scan elke minuut
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=60
+[Install]
+WantedBy=timers.target
+EOF
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now turtlebot-monitor-wifiscan.timer
+fi
+
 # 4. Scherm: pagina schermvullend bij opstart
 AUTOSTART="$HOME/.config/autostart/turtlebot-monitor.desktop"
 if [ "$KIOSK" = none ]; then
