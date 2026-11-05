@@ -558,8 +558,8 @@ details.bar summary { cursor:pointer; }
     <button data-power="reboot">Herstarten</button> <button data-power="poweroff">Afsluiten</button></span>
 </div>
 <div class="bar" id="updBox" style="display:none"></div>
-<details class="bar" id="chanBox" style="display:none"><summary id="chanSum"></summary><div id="chanBody"></div></details>
 <div class="grid" id="grid"></div>
+<details class="bar" id="chanBox" style="display:none;margin-top:14px"><summary id="chanSum"></summary><div id="chanBody"></div></details>
 <div class="bar" style="margin-top:14px;display:block" id="libBox">
   <b>Kaartenbibliotheek</b> <span class="sub">- kaart + zones + routes. Een robot stuurt een kaart hierheen via
   "meer... &gt; kaart X naar bibliotheek"; daarna kan ze naar andere robots. Bestaat de kaart daar al, dan wordt de oude
