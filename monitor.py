@@ -762,6 +762,9 @@ button svg, .chip svg { vertical-align:-3px; margin-right:4px; }
 .head input { margin:0; cursor:pointer; }
 .caret { color:var(--muted); width:1em; }
 .warnline { margin-top:6px; font-size:.8rem; color:var(--yellow); }
+.errlist { margin-top:6px; font-size:.78rem; overflow-wrap:anywhere; }
+.errlist .errhead { color:var(--muted); margin-bottom:2px; }
+.errlist .err { padding:3px 0; border-top:1px solid var(--border); }
 .info { margin-top:8px; font-size:.8rem; color:var(--muted); }
 .btns select { flex:1 1 10em; min-width:0; max-width:100%; }
 .btns button.on { background:var(--accent); border-color:var(--accent); color:#0b1a2b; font-weight:600; }
@@ -1036,7 +1039,7 @@ var SVC_NAME = { zenoh: "Zenoh", rosbridge: "rosbridge", webpagina: "webpagina",
                  twist_mux: "twist_mux", cmd_vel_guard: "cmd_vel_guard", nav_web: "nav-web", system_info: "systeeminfo" };
 // Since 0.20/0.23 the robots send which services stopped or crashed and the
 // last ERROR/FATAL lines from /rosout (system_info_node)
-function health(s, msgs, warns, tips) {
+function health(s, msgs, warns, tips, rosErrs) {
   var sv = s.services || {};
   Object.keys(sv).forEach(function (k) {
     // terminal: deliberately off without a password (older images report false)
@@ -1049,7 +1052,7 @@ function health(s, msgs, warns, tips) {
   var errs = (s.rosout_errors || []).filter(function (e) { return e.t > t - 300; });
   if (errs.length) {
     warns.push(errs.length + " ROS-fout(en) laatste 5 min");
-    errs.forEach(function (e) { tips.push(e.level + " " + e.node + ": " + e.msg); });
+    errs.forEach(function (e) { tips.push(e.level + " " + e.node + ": " + e.msg); rosErrs.push(e); });
   }
 }
 // Linux load average (1 min) of the whole Pi, as a share of its cores: load 4
@@ -1110,7 +1113,7 @@ function saveOpen() { try { localStorage.setItem("tbmonOpen", JSON.stringify(ope
 function tile(r, now, common) {
   var d = r.data || {}, s = d.status || {}, l = d.launch || {};
   var age = r.seen ? now - r.seen : null, online = age != null && age < 20;
-  var level = "ok", msgs = [], warns = [], tips = [];
+  var level = "ok", msgs = [], warns = [], tips = [], rosErrs = [];
   if (!online) level = "off";
   var b = batt(online ? d.battery_v : null);
   // changes vs the standard settings: information, not a warning - the robot works
@@ -1122,7 +1125,7 @@ function tile(r, now, common) {
     if (s.throttled & 1) msgs.push("Onderspanning van de Pi (voeding/batterij)");
     if (b[1] === "y") warns.push("batterij bijna leeg");
     if (s.wifi_signal_dbm != null && s.wifi_signal_dbm < -72) warns.push("zwakke wifi");
-    health(s, msgs, warns, tips);
+    health(s, msgs, warns, tips, rosErrs);
     var v = (s.image_version || "").split(" ")[0];
     if (common && v && v !== common) warns.push("andere versie dan de rest (" + common + ")");
     var cc = channelCheck(r);
@@ -1146,7 +1149,8 @@ function tile(r, now, common) {
   var tip = esc(tips.map(function (t) { return "- " + t; }).join("\n"));
   if (!open)
     return '<div class="tile ' + level + (online ? "" : " off") + '">' + head + alerts +
-      (warns.length ? '<div class="warnline" title="' + tip + '">' + esc(warns.join(", ")) + "</div>" : "") + "</div>";
+      (warns.length ? '<div class="warnline" title="' + tip + '">' + esc(warns.join(", ")) +
+        (rosErrs.length ? " (klik voor de meldingen)" : "") + "</div>" : "") + "</div>";
   var temp = s.cpu_temp_c != null ? Math.round(s.cpu_temp_c) + " °C" : "--";
   var tc = s.cpu_temp_c > 80 ? "r" : s.cpu_temp_c > 70 ? "y" : "";
   return '<div class="tile ' + level + (online ? "" : " off") + '">' + head +
@@ -1167,10 +1171,23 @@ function tile(r, now, common) {
       "<span>Uptime</span><span>" + (s.uptime_seconds ? ago(s.uptime_seconds) : "--") + "</span>" +
       "</div>" + alerts +
       (warns.length ? '<div class="warnmsg" title="' + tip + '">' + esc(warns.join(", ")) + "</div>" : "") +
+      rosErrList(rosErrs) +
       (chg.length ? '<div class="info" title="' + esc(chg.map(function (c) { return "- " + c.text; }).join("\n")) + '">' +
         chg.length + " aanpassing(en) t.o.v. de standaard (details: muis erop)</div>" : "") + controls(r) : "") +
     '<div class="sub" style="margin-top:8px">' + (KIOSK ? "statuspagina" :
       '<a href="http://10.0.' + Number(r.nr) + '.10:8080/" target="_blank">statuspagina</a>') + " (wifi TB-AP-" + nr + ")</div></div>";
+}
+// ROS errors as a list in the opened tile: the tooltip on the warning line
+// needs a mouse (not on the kiosk touch screen or a phone). Newest first,
+// time = the robot's clock.
+function rosErrList(errs) {
+  if (!errs.length) return "";
+  return '<div class="errlist"><div class="errhead">ROS-fouten (laatste 5 min)</div>' +
+    errs.slice().reverse().map(function (e) {
+      var t = new Date(e.t * 1000).toLocaleTimeString("nl-BE", { hour12: false });
+      return '<div class="err"><span class="sub">' + esc(t) + '</span> <b class="' + (e.level === "FATAL" ? "r" : "y") + '">' +
+        esc(e.level) + "</b> <b>" + esc(e.node) + "</b>: " + esc(e.msg) + "</div>";
+    }).join("") + "</div>";
 }
 // AP channel plan (monitor/wifi_kanalen.csv) vs what the robot reports
 // (robot image 1.3.0+, width 1.4.0+): null = nothing to compare
