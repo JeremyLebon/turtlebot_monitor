@@ -806,6 +806,15 @@ details.bar summary { cursor:pointer; }
 .chtab { border-collapse:collapse; margin-top:8px; font-size:.82rem; }
 .chtab td, .chtab th { padding:2px 10px 2px 0; text-align:left; }
 .chtab th { color:var(--muted); font-weight:400; }
+.pinpad { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex; align-items:center; justify-content:center; z-index:50; }
+.pinbox { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px; width:min(320px,92vw); }
+.pinbox .pintitle { font-weight:600; margin-bottom:8px; }
+.pinbox .pindots { font-size:1.6rem; letter-spacing:.3em; text-align:center; min-height:2.2rem; margin-bottom:10px; }
+.pinbox .pinkeys { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+.pinbox .pinkeys button { font-size:1.4rem; padding:14px 0; }
+.pinbox .pinact { display:flex; gap:8px; margin-top:10px; }
+.pinbox .pinact button { flex:1; font-size:1rem; padding:10px 0; }
+.pinbox .pinact button.ok { background:var(--accent); border-color:var(--accent); color:#0b1a2b; font-weight:700; }
 </style></head><body>
 <header><h1>TurtleBot Monitor</h1><span class="sub" id="summary">laden...</span>
   <span style="margin-left:auto;display:flex;gap:6px"><button id="openAll"></button>
@@ -944,9 +953,39 @@ setInterval(function () {
 }, 10000);
 document.getElementById("loginBtn").addEventListener("click", function () {
   if (this.dataset.session) { post("/api/logout"); return; }
-  var pin = prompt("Docenten-PIN:");
-  if (pin) post("/api/login", { pin: pin });
+  pinPad("Docenten-PIN", function (pin) { post("/api/login", { pin: pin }); });
 });
+// On-screen keypad instead of prompt(): the kiosk touchscreen has no keyboard.
+// A real keyboard still works (digits, Backspace, Enter, Escape).
+function pinPad(title, done) {
+  var pin = "", ov = document.createElement("div");
+  ov.className = "pinpad";
+  ov.innerHTML = '<div class="pinbox"><div class="pintitle"></div><div class="pindots"></div><div class="pinkeys">' +
+    [1, 2, 3, 4, 5, 6, 7, 8, 9].map(function (d) { return '<button data-d="' + d + '">' + d + '</button>'; }).join("") +
+    '<button data-d="back">&#9003;</button><button data-d="0">0</button><button data-d="clear">C</button></div>' +
+    '<div class="pinact"><button data-d="cancel">Annuleren</button><button class="ok" data-d="ok">OK</button></div></div>';
+  ov.querySelector(".pintitle").textContent = title;
+  var dots = ov.querySelector(".pindots");
+  function close() { document.removeEventListener("keydown", onKey, true); ov.remove(); }
+  function press(d) {
+    if (/^[0-9]$/.test(d)) { if (pin.length < 8) pin += d; }
+    else if (d === "back") pin = pin.slice(0, -1);
+    else if (d === "clear") pin = "";
+    else if (d === "cancel") return close();
+    else if (d === "ok") { if (pin) { close(); done(pin); } return; }
+    dots.textContent = "\u25CF".repeat(pin.length);
+  }
+  function onKey(e) {
+    var k = e.key, m = { Backspace: "back", Enter: "ok", Escape: "cancel" };
+    if (/^[0-9]$/.test(k) || m[k]) { e.preventDefault(); e.stopPropagation(); press(m[k] || k); }
+  }
+  ov.addEventListener("click", function (e) {
+    var b = e.target.closest("button");
+    if (b) press(b.dataset.d); else if (e.target === ov) close();
+  });
+  document.addEventListener("keydown", onKey, true);
+  document.body.appendChild(ov);
+}
 function selectedNames() {
   return lastRobots.filter(function (r) { return r.listening && selected[r.robot]; }).map(function (r) { return r.robot; });
 }
@@ -961,11 +1000,13 @@ document.getElementById("updAll").addEventListener("click", function () {
 document.getElementById("pinAll").addEventListener("click", function () {
   var names = lastRobots.filter(function (r) { return r.listening; }).map(function (r) { return r.robot; });
   if (!names.length) { alert("Geen enkele robot luistert naar de monitor."); return; }
-  var pin = prompt("Nieuwe docenten-PIN voor Beheer (4-8 cijfers), voor " + names.length + " robots:");
-  if (pin === null) return;
-  if (!/^[0-9]{4,8}$/.test(pin)) { alert("PIN moet 4 tot 8 cijfers zijn."); return; }
-  if (prompt("Nog eens:") !== pin) { alert("De PIN's verschillen - niets veranderd."); return; }
-  post("/api/set_pin", { pin: pin, robots: names });
+  pinPad("Nieuwe docenten-PIN (4-8 cijfers), voor " + names.length + " robots", function (pin) {
+    if (!/^[0-9]{4,8}$/.test(pin)) { alert("PIN moet 4 tot 8 cijfers zijn."); return; }
+    pinPad("Nog eens", function (again) {
+      if (again !== pin) { alert("De PIN's verschillen - niets veranderd."); return; }
+      post("/api/set_pin", { pin: pin, robots: names });
+    });
+  });
 });
 document.getElementById("updCancel").addEventListener("click", function () { post("/api/update_all/cancel"); });
 document.getElementById("selPick").addEventListener("change", function (e) {
