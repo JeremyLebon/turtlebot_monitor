@@ -39,13 +39,20 @@ import secrets
 import threading
 import time
 import urllib.parse
+import urllib.request
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CONFIG_CSV = os.path.join(HERE, "..", "turtlebot_config.csv")
+# Robot list (hostname + nr): the same turtlebot_config.csv the robots get from
+# the public setup repo turtlebot_robot. Fetched at start and every 10 min,
+# kept as a local copy so a restart without internet still knows the robots.
+CONFIG_URL = os.environ.get("TURTLEBOT_CONFIG_URL",
+                            "https://raw.githubusercontent.com/JeremyLebon/turtlebot_robot/main/turtlebot_config.csv")
+CONFIG_CSV = os.path.join(HERE, "turtlebot_config.csv")   # local copy (not in git)
+CONFIG_OLD = os.path.join(HERE, "..", "turtlebot_config.csv")   # before 2026-11: next to monitor/ in turtlebot_setup
 # Kaartenbibliotheek: kaartbundels (kaart + zones + routes) van de robots,
-# om op andere robots te zetten. Bestanden: monitor/maps/<naam>.tbmap.json
+# om op andere robots te zetten. Bestanden: maps/<naam>.tbmap.json
 MAP_LIB = os.path.join(HERE, "maps")
 PIN_FILE = os.path.join(HERE, "docent_pin")   # hash of the docenten-PIN (not in git)
 SESSION_S = 12 * 3600                         # "Docent aanmelden" lasts one school day
@@ -404,11 +411,33 @@ def wifi_scan():
 
 def expected_robots():
     """Robots from turtlebot_config.csv, so never-seen robots show up too."""
-    try:
-        with open(CONFIG_CSV, newline="") as f:
-            return [{"robot": r["hostname"], "nr": r["nr"]} for r in csv.DictReader(f)]
-    except (OSError, KeyError):
-        return []
+    for path in (CONFIG_CSV, CONFIG_OLD):
+        try:
+            with open(path, newline="") as f:
+                return [{"robot": r["hostname"], "nr": r["nr"]} for r in csv.DictReader(f)]
+        except (OSError, KeyError):
+            pass
+    return []
+
+
+def config_loop():
+    """Keep the local copy of the robot list up to date (CONFIG_URL)."""
+    while True:
+        try:
+            with urllib.request.urlopen(CONFIG_URL, timeout=10) as r:
+                text = r.read(100000).decode("utf-8")
+            rows = list(csv.DictReader(io.StringIO(text)))
+            if not rows or any("hostname" not in x or "nr" not in x for x in rows):
+                raise ValueError("geen hostname/nr-kolommen")
+            old = open(CONFIG_CSV).read() if os.path.exists(CONFIG_CSV) else None
+            if text != old:
+                with open(CONFIG_CSV + ".tmp", "w") as f:
+                    f.write(text)
+                os.replace(CONFIG_CSV + ".tmp", CONFIG_CSV)
+                print("Robotlijst bijgewerkt: %d robots (%s)" % (len(rows), CONFIG_URL), flush=True)
+        except (OSError, ValueError, UnicodeDecodeError) as exc:
+            print("Robotlijst niet opgehaald (%s): %s - de lokale kopie blijft" % (CONFIG_URL, exc), flush=True)
+        time.sleep(600)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1189,7 +1218,7 @@ function rosErrList(errs) {
         esc(e.level) + "</b> <b>" + esc(e.node) + "</b>: " + esc(e.msg) + "</div>";
     }).join("") + "</div>";
 }
-// AP channel plan (monitor/wifi_kanalen.csv) vs what the robot reports
+// AP channel plan (wifi_kanalen.csv) vs what the robot reports
 // (robot image 1.3.0+, width 1.4.0+): null = nothing to compare
 function channelCheck(r) {
   var s = (r.data || {}).status || {}, plan = ((lastJ || {}).wifi_plan || {})[String(Number(r.nr))];
@@ -1262,7 +1291,7 @@ function renderChannels(on) {
     rows.join("") + "</table>" +
     Object.keys(bands).sort().reverse().map(function (b) { return spectrum(bands[b], b); }).join("") : "") +
     (scan ? scan.html : "") +
-    '<div class="sub" style="margin-top:6px">Plan: monitor/wifi_kanalen.csv. Overlappende blokken delen de zendtijd; ' +
+    '<div class="sub" style="margin-top:6px">Plan: wifi_kanalen.csv. Overlappende blokken delen de zendtijd; ' +
     "20 MHz-kanalen 36/40/44/48 overlappen op papier niet, maar AP's vlak bij elkaar storen ook hun buurkanaal (zet ze op " +
     "Transmit Power Low, zie docs/ap-migration.md); 80 MHz neemt alle vier in.</div>";
 }
@@ -1321,7 +1350,7 @@ function renderWifitest(j) {
   html += '<div class="sub" style="margin-top:6px">Gemeten bij de monitor-RPi (robot → AP → kabel; met ↓ ook terug). ' +
     "Met een vaste snelheid: haalt elke robot die tegelijk (✓ = minstens 90 %)? Een camerastream 640x480 is ~3,4 Mbit/s, " +
     "met Lichtblick en kaart samen ~5-10 Mbit/s per groep. ↓ ook = de AP zendt evenveel, zoals naar de laptop van de student. " +
-    "Logboek: monitor/wifitest_log.jsonl.</div>";
+    "Logboek: wifitest_log.jsonl.</div>";
   document.getElementById("wtBody").innerHTML = html;
 }
 document.addEventListener("click", function (e) {
@@ -1512,6 +1541,7 @@ def main():
     REMOTE_CONTROL = args.remote_control
     VIEW_ONLY = args.view_only
     threading.Thread(target=update_queue_loop, daemon=True).start()
+    threading.Thread(target=config_loop, daemon=True).start()
     srv = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
     srv.daemon_threads = True   # waiting /poll requests don't block Ctrl+C
     if args.control_port:

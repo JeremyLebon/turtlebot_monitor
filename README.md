@@ -9,6 +9,18 @@ Elke robot **stuurt** elke 5 s zijn status naar deze monitor
 de NAT van zijn eigen AP. Enkel de Python-standaardbibliotheek, geen extra
 pakketten.
 
+**Robotlijst.** De monitor haalt `turtlebot_config.csv` (welke robots er zijn:
+hostname + nummer) bij het starten en daarna elke 10 minuten uit de publieke
+setup-repo van de robots:
+https://raw.githubusercontent.com/JeremyLebon/turtlebot_robot/main/turtlebot_config.csv.
+Hij bewaart een lokale kopie, dus een herstart zonder internet werkt ook. Een
+nieuwe robot: enkel `turtlebot_config.csv` in `turtlebot_robot` aanpassen. Een
+andere bron: omgevingsvariabele `TURTLEBOT_CONFIG_URL`.
+
+Tot november 2026 zat de monitor in de map `monitor/` van `turtlebot_setup`; de
+geschiedenis is meegekomen. De oude inhoud van deze repo (DDS/domain_bridge)
+staat in de branch `dds-oud`.
+
 ## 1. Adres instellen (eenmalig)
 
 1. Geef de laptop of de RPi (optie E) een **vast IP** op het subnet van de
@@ -83,19 +95,19 @@ plus de firewallregel uit A (`firewall_regel.ps1`). Starten in WSL:
   De PIN is dezelfde als **Docenten-PIN** (Beheer op de robots); de eerste keer
   instellen: `python monitor.py --set-pin` (Docker:
   `docker exec -it turtlebot-monitor python monitor.py --set-pin`). Enkel de
-  hash staat in `monitor/docent_pin`. Bewust voor iedereen openzetten:
+  hash staat in `docent_pin`. Bewust voor iedereen openzetten:
   `python monitor.py --remote-control`.
 - **Wifikanalen** (robot-image 1.3.0+, breedte 1.4.0+): het uitklapblok
   *Wifikanalen* zegt of alle robots volgens plan zitten; opengeklapt een
   tabel (band, kanaal, breedte, gepland, ✓/✗) en een spectrumgrafiek met per
   robot een blok van de kanaalbreedte - overlappende blokken delen de
   zendtijd. Op de tegel: ✓ of ✗ achter het kanaal. Het plan (kanaal +
-  breedte per robot) staat in `monitor/wifi_kanalen.csv` (uit
-  `docs/ap-migration.md`); pas het aan de tafelschikking in het lokaal aan.
+  breedte per robot) staat in `wifi_kanalen.csv` (uit
+  `docs/ap-migration.md` van `turtlebot_setup`); pas het aan de tafelschikking in het lokaal aan.
 - **Omgeving** (enkel op de monitor-RPi): de RPi hangt aan de kabel, dus zijn
   wifi is vrij en scant elke minuut alle netwerken in de buurt
   (`turtlebot-monitor-wifiscan.timer`, `install_rpi.sh` stap 3b, schrijft
-  `wifi_scan.py` -> `monitor/wifi_scan.json`, signaal in dBm via nl80211). In *Wifikanalen*: per TB-AP het kanaal en de breedte
+  `wifi_scan.py` -> `wifi_scan.json`, signaal in dBm via nl80211). In *Wifikanalen*: per TB-AP het kanaal en de breedte
   op 5 en 2.4 GHz tegen het plan (ook voor robots die nog niets melden), hoeveel
   eigen en andere netwerken op elk gepland kanaal zitten, en een spectrum met
   één rij per zender (grijs = niet van ons: eduroam, gsm-hotspots, ...). Het
@@ -112,7 +124,7 @@ Python-image. In deze map: `docker compose up -d`, daarna
 kijken zonder knoppen; 8091 wordt enkel op 127.0.0.1 gepubliceerd, zodat
 niemand anders kan bedienen. Docker Desktop zet poort 8090 open op Windows
 zelf - geen mirrored networking of port proxy nodig, wel de firewallregel
-(`firewall_regel.ps1`). De kaartenbibliotheek blijft in `monitor/maps/`.
+(`firewall_regel.ps1`). De kaartenbibliotheek blijft in `maps/`.
 
 ### E. Eigen Raspberry Pi 5 (vast in het lokaal)
 
@@ -124,18 +136,12 @@ Python-image bestaat ook voor arm64.
 1. Raspberry Pi OS **64-bit** op de SD-kaart (Raspberry Pi Imager): de
    gewone versie met desktop als er een scherm aan komt, anders Lite. Zet in
    de Imager een gebruiker, SSH aan en geen wifi (kabel).
-2. Vanaf je laptop de map `monitor/` en `turtlebot_config.csv` kopiëren
-   (in de map `turtlebot_setup`):
+2. Op de RPi (via `ssh`) deze repo klonen en installeren:
 
    ```sh
-   ssh <gebruiker>@<ip-rpi> mkdir -p turtlebot_monitor
-   scp -r monitor turtlebot_config.csv <gebruiker>@<ip-rpi>:turtlebot_monitor/
-   ```
-
-3. Op de RPi (via `ssh`):
-
-   ```sh
-   bash ~/turtlebot_monitor/monitor/install_rpi.sh
+   sudo apt install -y git
+   git clone https://github.com/JeremyLebon/turtlebot_monitor.git ~/turtlebot_monitor
+   bash ~/turtlebot_monitor/install_rpi.sh
    sudo reboot
    ```
 
@@ -143,7 +149,7 @@ Python-image bestaat ook voor arm64.
    opstart vanzelf) en - als er een desktop is - meldt automatisch aan, houdt
    het scherm aan en opent de pagina schermvullend (`kiosk.sh`, Chromium).
    Afsluiten: Alt+F4.
-4. Het IP van de RPi vast zetten (DHCP-reservatie) en in `monitor.conf` van
+3. Het IP van de RPi vast zetten (DHCP-reservatie) en in `monitor.conf` van
    `turtlebot_robot` zetten (stap 1 bovenaan).
 
 **Scherm met of zonder knoppen.** Standaard toont het scherm de pagina
@@ -171,19 +177,39 @@ en dan http://localhost:8091 op de laptop (zolang de tunnel open staat).
 
 **Herstarten / afsluiten.** Na Docent aanmelden staan rechts in de balk de
 knoppen *Monitor-RPi: Herstarten / Afsluiten*. De container schrijft
-`monitor/power_request`; de systemd path unit `turtlebot-monitor-power`
+`power_request`; de systemd path unit `turtlebot-monitor-power`
 (geïnstalleerd door `install_rpi.sh`) voert het uit. Na afsluiten: stekker uit
 en in, of de aan/uit-knop van de RPi 5. Op een laptop verschijnen de knoppen
-niet (geen `monitor/.rpi_power`).
+niet (geen `.rpi_power`).
 
-**Bijwerken.** Kopieer `monitor/` en `turtlebot_config.csv` opnieuw (stap 2;
-`monitor/maps/` op de RPi is de kaartenbibliotheek - niet overschrijven met een
-oudere versie) en op de RPi: `cd ~/turtlebot_monitor/monitor && docker compose restart`.
+**Bijwerken.** Op de RPi:
+
+```sh
+cd ~/turtlebot_monitor && git pull && docker compose restart
+```
+
+De kaartenbibliotheek (`maps/`), de PIN (`docent_pin`) en de logs staan niet in
+git: `git pull` laat ze staan.
+
+**Overstappen van de oude kopie** (vóór november 2026: `~/turtlebot_monitor/monitor/`,
+gekopieerd met `scp`). Eenmalig op de RPi:
+
+```sh
+cd ~/turtlebot_monitor/monitor && docker compose down
+mv ~/turtlebot_monitor ~/turtlebot_monitor_oud
+git clone https://github.com/JeremyLebon/turtlebot_monitor.git ~/turtlebot_monitor
+cd ~/turtlebot_monitor_oud/monitor
+cp -r maps docent_pin wifitest_log.jsonl ~/turtlebot_monitor/ 2>/dev/null
+bash ~/turtlebot_monitor/install_rpi.sh            # zelfde optie als eerst (--knoppen?)
+```
+
+Werkt alles, dan mag `~/turtlebot_monitor_oud` weg.
 
 ## Testen
 
 - http://localhost:8090 toont alle robots uit `turtlebot_config.csv`, grijs
-  tot ze iets sturen.
+  tot ze iets sturen. De log toont `Robotlijst bijgewerkt: 9 robots` (of waarom
+  het ophalen mislukte).
 - Op een robot (statuspagina > Systeem) staat of het versturen lukt.
 - Zonder monitor (laptop weg) proberen de robots het om de 30 s opnieuw -
   ze merken er verder niets van.

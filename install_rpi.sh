@@ -2,9 +2,9 @@
 # TurtleBot Monitor op een eigen Raspberry Pi 5 (optie E in README.md).
 # Eenmalig uitvoeren OP de RPi, als gewone gebruiker (niet met sudo):
 #
-#   bash ~/turtlebot_monitor/monitor/install_rpi.sh            # monitor + scherm (alleen kijken)
-#   bash ~/turtlebot_monitor/monitor/install_rpi.sh --knoppen  # scherm toont de pagina MET knoppen
-#   bash ~/turtlebot_monitor/monitor/install_rpi.sh --geen-scherm
+#   bash ~/turtlebot_monitor/install_rpi.sh            # monitor + scherm (alleen kijken)
+#   bash ~/turtlebot_monitor/install_rpi.sh --knoppen  # scherm toont de pagina MET knoppen
+#   bash ~/turtlebot_monitor/install_rpi.sh --geen-scherm
 #
 # Doet: Docker installeren, de monitor-container starten (start daarna vanzelf
 # bij elke opstart), knoppen om de RPi te herstarten/af te sluiten, en met een desktop: automatisch aanmelden, scherm niet
@@ -23,9 +23,6 @@ esac
 
 if [ "$(id -u)" = 0 ]; then
   echo "Voer dit uit als gewone gebruiker, niet met sudo."; exit 1
-fi
-if [ ! -f "$HERE/../turtlebot_config.csv" ]; then
-  echo "turtlebot_config.csv ontbreekt naast de map monitor/ (zie README.md, optie E)."; exit 1
 fi
 
 # 1. Docker
