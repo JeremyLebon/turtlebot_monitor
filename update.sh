@@ -20,12 +20,14 @@ new_commit=$(git rev-parse --short HEAD)
 
 if [ "$old_commit" = "$new_commit" ]; then
     echo "Al de nieuwste versie: v$old · $new_commit"
-    exit 0
+    # toch (her)starten als de container weg is: na 'docker compose down' bleef
+    # de kiosk anders op "site niet bereikbaar" staan (2026-11-12)
+    docker compose up -d
+else
+    echo "v$old · $old_commit -> v$(cat VERSION) · $new_commit"
+    docker compose up -d
+    docker compose restart
 fi
-
-echo "v$old · $old_commit -> v$(cat VERSION) · $new_commit"
-docker compose up -d
-docker compose restart
 for i in $(seq 1 30); do
     v=$(curl -s --max-time 1 http://127.0.0.1:8090/api/robots | grep -o '"version": *"[^"]*"' | cut -d'"' -f4) && [ -n "$v" ] && break
     sleep 1

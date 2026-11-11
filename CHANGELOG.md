@@ -6,6 +6,12 @@ de monitor-RPi komt (`git pull`). De pagina toont het naast de titel
 ("v1.0.0 · e46ac83", met de commit van de clone), de log bij het starten,
 `/api/robots` in het veld `version`.
 
+## 1.1.2 - 2026-11-12
+- **`update.sh` start de monitor ook als hij al de nieuwste versie heeft.**
+  Na `docker compose down` en daarna `update.sh` (niets nieuws op GitHub)
+  stopte het script meteen: geen container, de kiosk bleef op "site niet
+  bereikbaar" staan, ook na een herstart van de RPi.
+
 ## 1.1.1 - 2026-11-11
 - **Terugschakelen ook voor robots op v1.9.4.** Die nemen de opdracht aan,
   maar melden nog niet welke versie als vorige bewaard is (pas vanaf v1.9.5).
