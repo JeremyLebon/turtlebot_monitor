@@ -86,6 +86,26 @@ MAP_LIB = os.path.join(HERE, "maps")
 PIN_FILE = os.path.join(HERE, "docent_pin")   # hash of the docenten-PIN (not in git)
 SESSION_S = 12 * 3600                         # "Docent aanmelden" lasts one school day
 MAP_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+# Robot image versions on Docker Hub, for "Versie kiezen" (robots from 1.9.4)
+VERSION_TAG_RE = re.compile(r"^v\d{1,3}\.\d{1,3}\.\d{1,3}$")
+DOCKER_HUB_TAGS = "https://hub.docker.com/v2/repositories/nobel86/turtlebot-rpi5/tags?page_size=100"
+versions_cache = {"t": 0, "data": None}
+
+
+def image_versions():
+    """Tagged robot images (vX.Y.Z) on Docker Hub, newest first, cached 10 min."""
+    if versions_cache["data"] and time.time() - versions_cache["t"] < 600:
+        return versions_cache["data"]
+    try:
+        with urllib.request.urlopen(DOCKER_HUB_TAGS, timeout=8) as r:
+            tags = json.loads(r.read()).get("results", [])
+    except (OSError, ValueError) as exc:
+        return {"versions": [], "error": "Docker Hub niet bereikbaar: %s" % exc}
+    vs = [{"tag": t["name"], "date": (t.get("last_updated") or "")[:10]}
+          for t in tags if VERSION_TAG_RE.match(t.get("name", ""))]
+    vs.sort(key=lambda v: [int(x) for x in v["tag"][1:].split(".")], reverse=True)
+    versions_cache.update(t=time.time(), data={"versions": vs[:20]})
+    return versions_cache["data"]
 
 
 def library():
@@ -138,7 +158,7 @@ cmd_seq = [0]
 REMOTE_CONTROL = False
 VIEW_ONLY = False
 ROBOT_COMMANDS = {"stop_all", "beep", "update", "reboot", "shutdown", "map_upload", "map_download", "set_pin",
-                  "wifitest"} | {
+                  "wifitest", "rollback", "install_version"} | {
     a + ":" + n for a in ("start", "stop") for n in ("bringup", "slam", "navigation", "camera", "joystick")}
 
 
@@ -630,6 +650,8 @@ class Handler(BaseHTTPRequestHandler):
             arg = r.get("arg")
             if cmd.startswith("map_") and not MAP_NAME_RE.match(str(arg or "")):
                 return self._send(400, "ongeldige kaartnaam", "text/plain")
+            if cmd == "install_version" and not VERSION_TAG_RE.match(str(arg or "")):
+                return self._send(400, "ongeldige versie", "text/plain")
             queue_command([str(n)[:40] for n in names], cmd, arg)
             return self._send(200, json.dumps({"queued": len(names)}), "application/json")
         if self.path.startswith("/wifitest/upload?"):   # robot: wifitest data, counted and dropped
@@ -740,6 +762,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, f.read(), "application/json")
         if self.path == "/api/maps":
             return self._send(200, json.dumps(library()), "application/json")
+        if self.path == "/api/versions":
+            return self._send(200, json.dumps(image_versions()), "application/json")
         if self.path == "/api/robots":
             with lock:
                 seen = dict(robots)
@@ -861,6 +885,7 @@ details.bar summary { cursor:pointer; }
   <select id="selPick" title="Robots aanvinken om bij te werken"><option value="">aanvinken...</option>
     <option value="all">alle die luisteren</option><option value="upd">met update beschikbaar</option><option value="none">geen</option></select>
   <select id="updPar" title="Hoeveel robots tegelijk"><option value="1">1 tegelijk</option><option value="2" selected>2 tegelijk</option><option value="3">3 tegelijk</option></select>
+  <select id="verAll" title="Aangevinkte robots terug naar de vorige versie, of een versie van Docker Hub installeren (robots vanaf v1.9.4)"></select>
   <button id="updCancel" style="display:none" title="Wachtende robots niet meer bijwerken (lopende updates werken af)">Wachtrij stoppen</button>
   <button data-all="shutdown" data-icon="power" title="Alle robots uitschakelen (einde les)">Uitschakelen</button>
   <button id="pinAll" data-icon="beheer" title="Docenten-PIN voor Beheer op de statuspagina, voor alle robots die luisteren, en voor Docent aanmelden op deze monitor (enkel de hash gaat naar de robots)">Docenten-PIN</button>
@@ -949,16 +974,20 @@ function batt(v) {   // 0 % = 11.0 V: there the OpenCR switches the motors off
   return [v.toFixed(1) + " V (" + Math.round(p) + " %)", v < 11.2 ? "r" : v < 11.4 ? "y" : "g", Math.round(p) + " %", p];
 }
 var CMD_TEXT = { wifitest: "wifitest", stop_all: "stop alles", beep: "piep", update: "bijwerken", reboot: "herstarten", shutdown: "uitschakelen",
-                 map_upload: "kaart naar bibliotheek", map_download: "kaart uit bibliotheek", set_pin: "PIN instellen" };
+                 map_upload: "kaart naar bibliotheek", map_download: "kaart uit bibliotheek", set_pin: "PIN instellen",
+                 rollback: "terug naar vorige versie", install_version: "versie installeren" };
 function cmdText(c) {
   if (CMD_TEXT[c]) return CMD_TEXT[c];
   var p = c.split(":"); return (p[0] === "start" ? "start " : "stop ") + p[1];
 }
-var CONFIRM = { reboot: 1, shutdown: 1, update: 1 };
+var CONFIRM = { reboot: 1, shutdown: 1, update: 1, rollback: 1, install_version: 1 };
+var CONFIRM_NOTE = { rollback: "De container herstart: lopende launches stoppen, de robot is ~1 minuut weg.",
+                     install_version: "De container herstart: lopende launches stoppen. Staat de versie nog niet op de robot, dan eerst downloaden (internet via de AP)." };
 var control = false;
 function send(cmd, names, arg) {
   var many = names.length > 1;
-  if ((CONFIRM[cmd] || many) && !confirm(cmdText(cmd) + (arg ? " '" + arg + "'" : "") + " voor " + (many ? names.length + " robots" : names[0]) + "?")) return;
+  if ((CONFIRM[cmd] || many) && !confirm(cmdText(cmd) + (arg ? " '" + arg + "'" : "") + " voor " + (many ? names.length + " robots" : names[0]) + "?" +
+                                         (CONFIRM_NOTE[cmd] ? "\n" + CONFIRM_NOTE[cmd] : ""))) return;
   fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ cmd: cmd, robots: names, arg: arg }) })
     .then(function (x) { if (!x.ok) return x.json().then(function (j) { alert(j.error || "geweigerd"); }); refresh(); });
@@ -1132,8 +1161,52 @@ function controls(r) {
     btn("beep", "bell", "", "Piep: laat de robot piepen, om hem terug te vinden", "ico") +
     btn("update", "update", "Bijwerken", "Software bijwerken (nieuw image + setup)") +
     btn("reboot", "reboot", "", "Robot herstarten", "ico") + btn("shutdown", "power", "", "Robot uitschakelen", "ico") + "</div>" +
-    (maps ? '<div class="btns">' + maps + "</div>" : "") + res;
+    (maps ? '<div class="btns">' + maps + "</div>" : "") + versionControls(r, dis) + res;
 }
+// Back to an older robot image: robots from 1.9.4 send image_previous (the
+// :vorige image, null if none was kept) and accept rollback/install_version
+var versions = null;
+function loadVersions() {
+  fetch("/api/versions").then(function (x) { return x.json(); }).then(function (j) {
+    versions = j; fillVerAll(); render();
+  }).catch(function () {});
+}
+function verOptions(cmdPrefix) {
+  if (!versions) return '<option value="" disabled>versies laden...</option>';
+  if (!versions.versions.length) return '<option value="" disabled>' + esc(versions.error || "geen versies") + "</option>";
+  return versions.versions.map(function (v) {
+    return '<option value="' + cmdPrefix + esc(v.tag) + '">' + esc(v.tag) + (v.date ? " (" + esc(v.date) + ")" : "") + "</option>";
+  }).join("");
+}
+function versionControls(r, dis) {
+  var l = (r.data || {}).launch || {};
+  if (!("image_previous" in l))
+    return r.listening ? '<div class="sub">Andere versie: vanaf robot-image v1.9.4 (nu enkel via Fenix &gt; Beheer)</div>' : "";
+  var prev = (l.image_previous || "").split(" ")[0];
+  return '<div class="btns">' +
+    '<button data-cmd="rollback" data-robot="' + esc(r.robot) + '"' + (prev ? dis : " disabled") +
+    ' title="' + esc(prev ? "Terug naar " + l.image_previous + " (de vorige image op de robot, zonder internet; nog eens = terug naar deze)"
+                      : "Geen vorige versie bewaard op deze robot (wordt bewaard bij een update als er 5 GB vrij is)") + '">' +
+    fxIcon("reboot", 14) + (prev ? "Terug naar " + esc(prev) : "Geen vorige versie") + "</button>" +
+    '<select data-robot="' + esc(r.robot) + '"' + dis + ' title="Een versie van Docker Hub installeren (internet via de AP)">' +
+    '<option value="">versie kiezen...</option>' + verOptions("install_version|") + "</select></div>";
+}
+function fillVerAll() {
+  var sel = document.getElementById("verAll");
+  sel.innerHTML = '<option value="">andere versie...</option><option value="rollback|">terug naar vorige versie</option>' +
+    '<optgroup label="versie installeren">' + verOptions("install_version|") + "</optgroup>";
+}
+document.getElementById("verAll").addEventListener("change", function (e) {
+  var v = e.target.value.split("|");
+  e.target.value = "";
+  if (!v[0]) return;
+  var names = selectedNames();
+  if (!names.length) { alert("Vink eerst de robots aan."); return; }
+  var old = lastRobots.filter(function (r) { return selected[r.robot] && !("image_previous" in ((r.data || {}).launch || {})); });
+  if (old.length) { alert("Kan pas vanaf robot-image v1.9.4, niet op: " + old.map(function (r) { return r.robot; }).join(", ")); return; }
+  send(v[0], names, v[1] || undefined);
+});
+fillVerAll();
 // Robot state from the launches (the active control source itself isn't in
 // the monitor payload): what the class is doing at a glance
 function robotState(l) {
@@ -1521,6 +1594,8 @@ function render() {
   updBtn.disabled = !control || busy || !nSel;
   updBtn.innerHTML = fxIcon("update") + (nSel ? nSel + " robot(s) bijwerken" : "Bijwerken (vink robots aan)");
   document.getElementById("selPick").disabled = !control;
+  document.getElementById("verAll").disabled = !control || busy || !nSel;
+  if (control && !versions) { versions = { versions: [] , error: "laden..." }; loadVersions(); }
   document.getElementById("rpiPower").style.display = control && j.rpi_power ? "" : "none";
   document.querySelectorAll("[data-all]").forEach(function (b) { b.disabled = !control; });
   var listening = rs.filter(function (r) { return r.listening; }).length;

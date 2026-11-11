@@ -84,6 +84,10 @@ plus de firewallregel uit A (`firewall_regel.ps1`). Starten in WSL:
 - **Per robot:** Stop, Piep (robot terugvinden), en via "meer...":
   bringup/SLAM/Navigatie/joystick/camera starten of stoppen, bijwerken,
   herstarten, uitschakelen.
+- **Andere robotversie** (robots vanaf image v1.9.4): per robot *Terug naar
+  vX.Y.Z* (de vorige image op de robot, zonder internet) en *versie
+  kiezen...* (versies op Docker Hub); voor de aangevinkte robots de keuzelijst
+  *andere versie...* in de balk. De container op de robot herstart (~1 min).
 - De robot vraagt zelf om opdrachten (long-poll op `/poll`), dus ook dit werkt
   door de NAT; een opdracht komt binnen ~1 s aan. Het resultaat staat onder
   de knoppen van de robot.
