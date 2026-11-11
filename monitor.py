@@ -44,6 +44,35 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def monitor_version():
+    """"v1.0.0 · e46ac83": VERSION + commit of the git clone.
+    Read from .git by hand: the Docker image (python:3.12-slim) has no git."""
+    try:
+        with open(os.path.join(HERE, "VERSION")) as f:
+            ver = "v" + f.read().strip()
+    except OSError:
+        ver = "v?"
+    git = os.path.join(HERE, ".git")
+    try:
+        with open(os.path.join(git, "HEAD")) as f:
+            head = f.read().strip()
+        sha = head
+        if head.startswith("ref: "):
+            ref = head[5:]
+            try:
+                with open(os.path.join(git, ref)) as f:
+                    sha = f.read().strip()
+            except OSError:   # packed ref (after git gc)
+                with open(os.path.join(git, "packed-refs")) as f:
+                    sha = next(l.split()[0] for l in f if l.strip().endswith(" " + ref))
+        return "%s · %s" % (ver, sha[:7])
+    except (OSError, StopIteration):
+        return ver
+
+
+MONITOR_VERSION = monitor_version()
 # Robot list (hostname + nr): the same turtlebot_config.csv the robots get from
 # the public setup repo turtlebot_robot. Fetched at start and every 10 min,
 # kept as a local copy so a restart without internet still knows the robots.
@@ -726,7 +755,7 @@ class Handler(BaseHTTPRequestHandler):
                 for r in out:
                     r["result"] = results.get(r["robot"])
                     r["listening"] = time.time() - polling.get(r["robot"], 0) < 30
-            return self._send(200, json.dumps({"now": time.time(), "robots": out,
+            return self._send(200, json.dumps({"now": time.time(), "robots": out, "version": MONITOR_VERSION,
                                                "update_queue": update_queue_state(),
                                                "control": self._may_control(),
                                                "session": self._session() is not None,
@@ -755,6 +784,10 @@ PAGE = r"""<!doctype html>
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 system-ui,sans-serif; padding:16px; }
 header { display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
+.stats { display:flex; flex-wrap:wrap; gap:8px; margin:-6px 0 14px; }
+.stat { display:inline-flex; align-items:center; gap:6px; background:var(--card); border:1px solid var(--border); border-radius:999px;
+        padding:4px 12px; font-size:.92rem; font-variant-numeric:tabular-nums; }
+.stat svg { flex:none; } .stat .lbl { color:var(--muted); }
 h1 { font-size:1.2rem; margin:0; }
 .sub { color:var(--muted); font-size:.82rem; }
 .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:12px; align-items:start; }
@@ -816,9 +849,10 @@ details.bar summary { cursor:pointer; }
 .pinbox .pinact button { flex:1; font-size:1rem; padding:10px 0; }
 .pinbox .pinact button.ok { background:var(--accent); border-color:var(--accent); color:#0b1a2b; font-weight:700; }
 </style></head><body>
-<header><h1>TurtleBot Monitor</h1><span class="sub" id="summary">laden...</span>
+<header><h1>TurtleBot Monitor</h1><span class="sub" id="monVer"></span><span class="sub" id="summary">laden...</span>
   <span style="margin-left:auto;display:flex;gap:6px"><button id="openAll"></button>
   <button id="loginBtn" style="display:none">Docent aanmelden</button></span></header>
+<div class="stats" id="stats"></div>
 <div class="bar" id="allBar">
   <b>Alle robots:</b>
   <button class="stop" data-all="stop_all" data-icon="stop" title="Alle launches stoppen - motoren stil">STOP ALLES</button>
@@ -881,6 +915,9 @@ var FX = {
   camera: '<path d="M3 7h4l2-3h6l2 3h4v13H3z"/><circle cx="12" cy="13" r="4"/>',
   robot: '<rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 7V4M9 12h.01M15 12h.01M9 16h6"/>',
   wifi: '<path d="M2 9a15 15 0 0 1 20 0M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1" fill="currentColor"/>',
+  down: '<path d="M12 4v15M6 13l6 6 6-6"/>',
+  up: '<path d="M12 20V5M6 11l6-6 6 6"/>',
+  screen: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
   lidar: '<circle cx="12" cy="12" r="2"/><path d="M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14M8 8a5 5 0 0 0 0 8M16 8a5 5 0 0 1 0 8"/>',
 };
 function fxIcon(name, size) {
@@ -1513,15 +1550,22 @@ function render() {
   document.getElementById("grid").innerHTML = rs.map(function (r) { return tile(r, j.now, common); }).join("");
   renderChannels(on);
   renderWifitest(j);
+  document.getElementById("monVer").textContent = j.version || "";
   // where the monitor itself is: what robots (monitor.conf) and browsers use
   var where = (j.host_ip || []).map(function (h) { return h.ip + ":8090"; }).join(", ");
   var bad = document.querySelectorAll(".tile.bad").length, warn = document.querySelectorAll(".tile.warn").length;
-  document.getElementById("summary").textContent = (where ? "monitor op " + where + " · " : "") +
-    on.length + " van " + rs.length + " robots online" +
-    (bad ? ", " + bad + " met een probleem" : "") + (warn ? ", " + warn + " met aandacht" : "") +
-    (upd ? ", " + upd + " met een update beschikbaar" : "") +
-    (on.length ? " · wifi-verkeer samen ↓ " + rate(rx) + " · ↑ " + rate(tx) : "") +
-    (haveWeb ? " · " + pages + " pagina's open" : "") + " - " + new Date().toLocaleTimeString("nl-BE");
+  var probs = [bad ? bad + " met een probleem" : "", warn ? warn + " met aandacht" : "",
+               upd ? upd + " met een update beschikbaar" : ""].filter(Boolean).join(", ");
+  var head = [where ? "monitor op " + where : "", probs].filter(Boolean).join(" · ");
+  document.getElementById("summary").textContent = (head ? head + " - " : "") + new Date().toLocaleTimeString("nl-BE");
+  // the same totals as icons on their own line under the header
+  function stat(icon, html, tip) { return '<span class="stat" title="' + tip + '">' + fxIcon(icon) + html + "</span>"; }
+  document.getElementById("stats").innerHTML =
+    stat("robot", "<b>" + on.length + "</b><span class=\"lbl\">/ " + rs.length + " online</span>", "Robots die de laatste 20 s iets stuurden") +
+    (on.length ? stat("wifi", '<span class="lbl">samen</span> ' + fxIcon("down", 14) + rate(rx) + " " + fxIcon("up", 14) + rate(tx),
+                      "Wifi-verkeer van alle robots samen (↓ naar de robots, ↑ van de robots)") : "") +
+    (haveWeb ? stat("screen", "<b>" + pages + "</b><span class=\"lbl\">pagina" + (pages === 1 ? "" : "'s") + " open</span>",
+                    "Open Fenix-pagina's op alle robots samen") : "");
 }
 function refreshLib() {
   fetch("/api/maps").then(function (x) { return x.json(); }).then(function (maps) {
@@ -1591,8 +1635,8 @@ def main():
         ctl.control = True
         threading.Thread(target=ctl.serve_forever, daemon=True).start()
         print("Knoppen op poort %d" % args.control_port)
-    print("TurtleBot Monitor op http://localhost:%d (robots sturen naar http://<dit-ip>:%d/push)"
-          % (args.port, args.port))
+    print("TurtleBot Monitor %s op http://localhost:%d (robots sturen naar http://<dit-ip>:%d/push)"
+          % (MONITOR_VERSION, args.port, args.port))
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
