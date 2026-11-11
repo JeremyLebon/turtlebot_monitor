@@ -6,6 +6,13 @@ de monitor-RPi komt (`git pull`). De pagina toont het naast de titel
 ("v1.0.0 · e46ac83", met de commit van de clone), de log bij het starten,
 `/api/robots` in het veld `version`.
 
+## 1.1.1 - 2026-11-11
+- **Terugschakelen ook voor robots op v1.9.4.** Die nemen de opdracht aan,
+  maar melden nog niet welke versie als vorige bewaard is (pas vanaf v1.9.5).
+  De knop heet dan *Terug naar vorige versie*; vroeger toonde de monitor voor
+  1.9.4 ten onrechte "nu enkel via Fenix > Beheer". Getest op turtlebot09:
+  1.9.4 -> 1.9.3 vanuit de monitor.
+
 ## 1.1.0 - 2026-11-11
 - **Terug naar een oudere robotversie** (na *Docent aanmelden*). Per robot:
   *Terug naar vX.Y.Z* (de vorige image op de robot, zonder internet; nog eens

@@ -1178,16 +1178,24 @@ function verOptions(cmdPrefix) {
     return '<option value="' + cmdPrefix + esc(v.tag) + '">' + esc(v.tag) + (v.date ? " (" + esc(v.date) + ")" : "") + "</option>";
   }).join("");
 }
+// v1.9.4 itself accepts the commands but doesn't send image_previous yet (1.9.5 does)
+function versionSupport(r) {
+  var d = r.data || {}, l = d.launch || {};
+  if ("image_previous" in l) return true;
+  var m = /^v(\d+)\.(\d+)\.(\d+)/.exec((d.status || {}).image_version || "");
+  return !!m && (Number(m[1]) * 1e6 + Number(m[2]) * 1e3 + Number(m[3])) >= 1009004;
+}
 function versionControls(r, dis) {
   var l = (r.data || {}).launch || {};
-  if (!("image_previous" in l))
+  if (!versionSupport(r))
     return r.listening ? '<div class="sub">Andere versie: vanaf robot-image v1.9.4 (nu enkel via Fenix &gt; Beheer)</div>' : "";
-  var prev = (l.image_previous || "").split(" ")[0];
+  var known = "image_previous" in l, prev = (l.image_previous || "").split(" ")[0];
   return '<div class="btns">' +
-    '<button data-cmd="rollback" data-robot="' + esc(r.robot) + '"' + (prev ? dis : " disabled") +
+    '<button data-cmd="rollback" data-robot="' + esc(r.robot) + '"' + (prev || !known ? dis : " disabled") +
     ' title="' + esc(prev ? "Terug naar " + l.image_previous + " (de vorige image op de robot, zonder internet; nog eens = terug naar deze)"
-                      : "Geen vorige versie bewaard op deze robot (wordt bewaard bij een update als er 5 GB vrij is)") + '">' +
-    fxIcon("reboot", 14) + (prev ? "Terug naar " + esc(prev) : "Geen vorige versie") + "</button>" +
+                      : known ? "Geen vorige versie bewaard op deze robot (wordt bewaard bij een update als er 5 GB vrij is)"
+                      : "Terug naar de vorige image op de robot (zonder internet). Welke versie dat is, meldt de robot vanaf v1.9.5") + '">' +
+    fxIcon("reboot", 14) + (prev ? "Terug naar " + esc(prev) : known ? "Geen vorige versie" : "Terug naar vorige versie") + "</button>" +
     '<select data-robot="' + esc(r.robot) + '"' + dis + ' title="Een versie van Docker Hub installeren (internet via de AP)">' +
     '<option value="">versie kiezen...</option>' + verOptions("install_version|") + "</select></div>";
 }
@@ -1202,7 +1210,7 @@ document.getElementById("verAll").addEventListener("change", function (e) {
   if (!v[0]) return;
   var names = selectedNames();
   if (!names.length) { alert("Vink eerst de robots aan."); return; }
-  var old = lastRobots.filter(function (r) { return selected[r.robot] && !("image_previous" in ((r.data || {}).launch || {})); });
+  var old = lastRobots.filter(function (r) { return selected[r.robot] && !versionSupport(r); });
   if (old.length) { alert("Kan pas vanaf robot-image v1.9.4, niet op: " + old.map(function (r) { return r.robot; }).join(", ")); return; }
   send(v[0], names, v[1] || undefined);
 });
