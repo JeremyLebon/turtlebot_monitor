@@ -185,8 +185,12 @@ niet (geen `.rpi_power`).
 **Bijwerken.** Op de RPi:
 
 ```sh
-cd ~/turtlebot_monitor && git pull && docker compose restart
+bash ~/turtlebot_monitor/update.sh
 ```
+
+of vanaf de laptop: `ssh <gebruiker>@<ip-rpi> bash turtlebot_monitor/update.sh`.
+Het script haalt de nieuwste versie op (`git pull`), herstart de monitor en
+toont de oude en nieuwe versie.
 
 De kaartenbibliotheek (`maps/`), de PIN (`docent_pin`) en de logs staan niet in
 git: `git pull` laat ze staan.
