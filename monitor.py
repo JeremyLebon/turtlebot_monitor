@@ -1298,6 +1298,27 @@ function softwareState(u) {
 var openTiles = {}, selected = {}, lastJ = null;
 try { openTiles = JSON.parse(localStorage.getItem("tbmonOpen") || "{}"); } catch (e) {}
 function saveOpen() { try { localStorage.setItem("tbmonOpen", JSON.stringify(openTiles)); } catch (e) {} }
+// Own wifi of the robot (TB-AP-<nr>) in the monitor RPi's scan: null = no
+// recent scan, false = not seen, else the bands and the strongest signal.
+function apSeen(nr) {
+  var sc = (lastJ || {}).wifi_scan;
+  if (!sc || !sc.radios) return null;
+  var hit = sc.radios.filter(function (r) { return r.ssids.indexOf("TB-AP-" + nr) >= 0; });
+  if (!hit.length) return false;
+  return { bands: hit.map(function (r) { return (r.freq > 5000 ? "5 GHz" : "2.4 GHz") + " kanaal " + r.ch; }),
+           dbm: Math.max.apply(null, hit.map(function (r) { return r.signal; })) };
+}
+function apText(nr) {
+  var a = apSeen(nr);
+  return a == null ? "--" : a ? '<span class="g">zichtbaar</span> <span class="sub">' + esc(a.bands.join(", ")) + " · " + a.dbm + " dBm</span>"
+    : '<span class="y">niet gezien door de monitor</span>';
+}
+function apBadge(nr, online) {
+  var a = apSeen(nr);
+  if (a == null || (!a && !online)) return "";   // robot off: no AP is normal
+  return '<span class="hi ' + (a ? "g" : "y") + '" title="Wifi TB-AP-' + nr + (a ? " zichtbaar (" + esc(a.bands.join(", ")) + ", " + a.dbm +
+    " dBm)" : " niet gezien door de monitor") + '">AP' + (a ? "" : " ✗") + "</span>";
+}
 function tile(r, now, common) {
   var d = r.data || {}, s = d.status || {}, l = d.launch || {};
   var age = r.seen ? now - r.seen : null, online = age != null && age < 20;
@@ -1332,7 +1353,7 @@ function tile(r, now, common) {
       '<span class="hi ' + (s.cpu_temp_c > 80 ? "r" : s.cpu_temp_c > 70 ? "y" : "g") + '" title="Raspberry Pi ' +
         (s.cpu_temp_c != null ? Math.round(s.cpu_temp_c) + " °C" : "--") + '">' + tempIcon() + "</span>" +
       (updateAvailable(s.updates) ? '<span class="hi y" title="Update beschikbaar">' + fxIcon("update", 15) + "</span>" : "")
-      : r.seen ? "offline sinds " + ago(age) : "nooit gezien") + "</span></div>";
+      : r.seen ? "offline sinds " + ago(age) : "nooit gezien") + apBadge(nr, online) + "</span></div>";
   var alerts = msgs.map(function (m) { return '<div class="alert">' + esc(m) + "</div>"; }).join("");
   var tip = esc(tips.map(function (t) { return "- " + t; }).join("\n"));
   if (!open)
@@ -1350,6 +1371,7 @@ function tile(r, now, common) {
         (s.wifi_band ? '<br><span title="' + s.wifi_freq_mhz + ' MHz">' + esc(s.wifi_band) + " kanaal " + s.wifi_channel +
           (s.wifi_width_mhz ? " · " + s.wifi_width_mhz + " MHz" : "") + "</span>" + channelMark(channelCheck(r)) : "") + "</span>" +
       "<span>Wifi-verkeer</span>" + wifiLoad(s) +
+      "<span>TB-AP-" + nr + "</span><span>" + apText(nr) + "</span>" +
       "<span>Gebruikers</span>" + usersText(s) +
       "<span>Kaart</span><span>" + esc(l.map_running || "--") + "</span>" +
       "<span>USB / lidar</span><span>" + (l.usb_power === "off" ? "uit (spaarstand)" : l.usb_power === "on" ? "aan" : "--") +

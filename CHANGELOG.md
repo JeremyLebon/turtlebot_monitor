@@ -6,6 +6,13 @@ de monitor-RPi komt (`git pull`). De pagina toont het naast de titel
 ("v1.0.0 · e46ac83", met de commit van de clone), de log bij het starten,
 `/api/robots` in het veld `version`.
 
+## 1.1.3 - 2026-11-12
+- **Per robot: is zijn wifi TB-AP-<nr> zichtbaar?** Uit de wifiscan van de
+  monitor-RPi. In de kop van de tegel: groen *AP* = zichtbaar, geel *AP ✗* =
+  robot online maar zijn AP niet gezien (een robot die uit staat toont niets,
+  of groen *AP* als zijn wifi toch uitzendt). Open tegel: regel *TB-AP-<nr>*
+  met band, kanaal en signaal. Zonder recente scan: niets.
+
 ## 1.1.2 - 2026-11-12
 - **`update.sh` start de monitor ook als hij al de nieuwste versie heeft.**
   Na `docker compose down` en daarna `update.sh` (niets nieuws op GitHub)
