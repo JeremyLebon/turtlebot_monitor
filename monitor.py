@@ -842,6 +842,8 @@ button:disabled, select:disabled { opacity:.4; cursor:default; }
 .head b { font-size:1rem; }
 .head .sum { margin-left:auto; font-size:.82rem; text-align:right; display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
 .hi { display:inline-flex; align-items:center; gap:3px; color:var(--muted); }
+.ch { display:inline-block; padding:0 6px; border-radius:999px; font-size:12px; font-weight:600; color:#111; line-height:17px; }
+.ch.plan { opacity:.55; }
 .hi.g { color:var(--green); } .hi.y { color:var(--yellow); } .hi.r { color:var(--red); }
 button svg, .chip svg { vertical-align:-3px; margin-right:4px; }
 .chip svg { margin-right:3px; }
@@ -1319,6 +1321,23 @@ function apBadge(nr, online) {
   return '<span class="hi ' + (a ? "g" : "y") + '" title="Wifi TB-AP-' + nr + (a ? " zichtbaar (" + esc(a.bands.join(", ")) + ", " + a.dbm +
     " dBm)" : " niet gezien door de monitor") + '">AP' + (a ? "" : " ✗") + "</span>";
 }
+// AP channel (5 GHz) of a robot, for handing robots out spread over the
+// channels: what the robot reports, else the monitor's scan, else the plan.
+var CH_COLOR = { 36: "#5aa9ff", 40: "#3ccf91", 44: "#f0b040", 48: "#c58cff" };
+function robotChannel(r) {
+  var s = (r.data || {}).status || {}, nr = String(r.nr || "").padStart(2, "0"), online = r.seen && (lastJ || {}).now - r.seen < 20;
+  if (online && s.wifi_band === "5 GHz" && s.wifi_channel) return { ch: s.wifi_channel, src: "gemeld door de robot" };
+  var sc = ((lastJ || {}).wifi_scan || {}).radios || [];
+  for (var i = 0; i < sc.length; i++)
+    if (sc[i].freq > 5000 && sc[i].ssids.indexOf("TB-AP-" + nr) >= 0) return { ch: sc[i].ch, src: "gezien door de monitor" };
+  var p = ((lastJ || {}).wifi_plan || {})[String(Number(r.nr))];
+  return p ? { ch: p["5"], src: "volgens plan (wifi_kanalen.csv)", plan: true } : null;
+}
+function chBadge(c) {
+  if (!c) return "";
+  return '<span class="ch' + (c.plan ? " plan" : "") + '" style="background:' + (CH_COLOR[c.ch] || "#aab") +
+    '" title="Wifi TB-AP op kanaal ' + c.ch + (c.src ? ", " + c.src : "") + '">' + c.ch + "</span>";
+}
 function tile(r, now, common) {
   var d = r.data || {}, s = d.status || {}, l = d.launch || {};
   var age = r.seen ? now - r.seen : null, online = age != null && age < 20;
@@ -1345,7 +1364,7 @@ function tile(r, now, common) {
   var head = '<div class="head" data-toggle="' + esc(r.robot) + '" title="Klik voor details">' +
     (control ? '<input type="checkbox" data-sel="' + esc(r.robot) + '"' + (selected[r.robot] ? " checked" : "") +
       (r.listening ? "" : " disabled") + ' title="Aanvinken om bij te werken">' : "") +
-    '<span class="caret">' + (open ? "▾" : "▸") + "</span><b>" + esc(r.robot) + '</b><span class="sum">' +
+    '<span class="caret">' + (open ? "▾" : "▸") + "</span><b>" + esc(r.robot) + "</b> " + chBadge(robotChannel(r)) + '<span class="sum">' +
     (online ? '<span class="' + st[1] + '">' + st[0] + "</span>" +
       '<span class="hi ' + b[1] + '" title="Batterij ' + esc(b[0]) + '">' + battIcon(b[3]) + b[2] + "</span>" +
       '<span class="hi ' + (s.wifi_signal_dbm == null ? "" : s.wifi_signal_dbm > -60 ? "g" : s.wifi_signal_dbm >= -70 ? "y" : "r") +
@@ -1667,10 +1686,25 @@ function render() {
   function stat(icon, html, tip) { return '<span class="stat" title="' + tip + '">' + fxIcon(icon) + html + "</span>"; }
   document.getElementById("stats").innerHTML =
     stat("robot", "<b>" + on.length + "</b><span class=\"lbl\">/ " + rs.length + " online</span>", "Robots die de laatste 20 s iets stuurden") +
+    channelStat(rs, on) +
     (on.length ? stat("wifi", '<span class="lbl">samen</span> ' + fxIcon("down", 14) + rate(rx) + " " + fxIcon("up", 14) + rate(tx),
                       "Wifi-verkeer van alle robots samen (↓ naar de robots, ↑ van de robots)") : "") +
     (haveWeb ? stat("screen", "<b>" + pages + "</b><span class=\"lbl\">pagina" + (pages === 1 ? "" : "'s") + " open</span>",
                     "Open Fenix-pagina's op alle robots samen") : "");
+}
+// Robots per AP channel (bold = online): hand them out alternating, so
+// neighbouring groups don't share a channel.
+function channelStat(rs, on) {
+  var per = {};
+  rs.forEach(function (r) {
+    var c = robotChannel(r);
+    if (c) (per[c.ch] = per[c.ch] || []).push('<span style="' + (on.indexOf(r) >= 0 ? "font-weight:700;color:var(--text)" : "") + '">' +
+      String(r.nr || "").padStart(2, "0") + "</span>");
+  });
+  var keys = Object.keys(per).sort(function (a, b) { return a - b; });
+  if (!keys.length) return "";
+  return '<span class="stat" title="Robots per wifikanaal (vet = online). Deel ze afwisselend uit: buren op een ander kanaal.">' +
+    keys.map(function (k) { return chBadge({ ch: Number(k) }) + " " + per[k].join(" "); }).join('<span class="lbl"> · </span>') + "</span>";
 }
 function refreshLib() {
   fetch("/api/maps").then(function (x) { return x.json(); }).then(function (maps) {

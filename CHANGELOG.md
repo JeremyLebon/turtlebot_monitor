@@ -6,6 +6,13 @@ de monitor-RPi komt (`git pull`). De pagina toont het naast de titel
 ("v1.0.0 · e46ac83", met de commit van de clone), de log bij het starten,
 `/api/robots` in het veld `version`.
 
+## 1.1.4 - 2026-11-13
+- **Wifikanaal per robot**, om de robots verdeeld uit te delen: gekleurd
+  bolletje met het kanaal (36, 48, ...) naast de naam van elke robot, en
+  bovenaan per kanaal welke robots erop zitten (vet = online). Bron: wat de
+  robot meldt, anders de wifiscan van de monitor, anders het plan
+  (`wifi_kanalen.csv`, bleek bolletje).
+
 ## 1.1.3 - 2026-11-12
 - **Per robot: is zijn wifi TB-AP-<nr> zichtbaar?** Uit de wifiscan van de
   monitor-RPi. In de kop van de tegel: groen *AP* = zichtbaar, geel *AP ✗* =
