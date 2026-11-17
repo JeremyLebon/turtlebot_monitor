@@ -59,8 +59,8 @@ samen met Navigatie (`launch_control_node`).
 - Kaartnaam = `map_bundle.running_map()`: zonder Navigatie geen vloot (met
   SLAM heeft elke robot een eigen map-frame, posities zijn dan niet te vergelijken).
 - Publiceert de andere robots: `/fleet/robots` (MarkerArray), `/fleet/poses`
-  (PoseArray), `/fleet/obstacles` (PointCloud2).
-- Niet getest op een robot (geen ROS hier); enkel de monitorkant is getest.
+  (PoseArray), `/fleet/keepout_mask` + `/fleet/filter_info` (costmap), service `/fleet/nearby`.
+- Niet getest op een robot (geen ROS hier). Getest: de monitorkant en `fleet_core` (geheugen, nearby, mask).
 
 **Werkwijze in de klas / showcase**
 
@@ -71,34 +71,79 @@ samen met Navigatie (`launch_control_node`).
    `start_<nr>` in de kaartbundel, die `fleet_node` (of nav.html) als
    initialpose publiceert - geen 2D Pose Estimate per robot meer nodig.
 
-## Fase 2 - elkaar ontwijken
+## Fase 2 - elkaar kennen en ontwijken (in `fleet_node` + `fleet_core`)
 
-Twee lagen, de eenvoudigste eerst:
+**Laatst gekende posities.** `fleet_node` onthoudt elke andere robot
+(`FleetMemory`). Valt de monitor weg, dan blijft de laatste positie staan.
+Na 3 s is ze *oud*: grijs in RViz, en de cirkel waar de robot kan zijn groeit
+met v_max x (leeftijd - 3 s), tot max. 1 m extra. Na 15 s is hij vergeten.
 
-1. **Voorrangsregel in `cmd_vel_guard`**: staat er een andere robot binnen
-   0,5 m in de rijrichting, dan vooruit = 0 (draaien mag). Bij een frontale
-   ontmoeting wacht het hoogste nummer. Robuust en makkelijk uit te leggen.
-2. **Andere robots in de lokale costmap** zodat Nav2 er omheen plant, ook
-   achter een hoek waar de lidar ze nog niet ziet:
+**"Wie is er in de buurt?"** De robot vraagt het aan zichzelf: hij heeft het
+beeld van de vloot lokaal, dus er gaat geen extra vraag naar de monitor.
 
-   ```yaml
-   local_costmap:
-     local_costmap:
-       ros__parameters:
-         voxel_layer:            # TB3: voxel_layer in de lokale costmap
-           observation_sources: scan fleet
-           fleet:
-             topic: /fleet/obstacles
-             data_type: "PointCloud2"
-             marking: True
-             clearing: False
-             max_obstacle_height: 0.3
-             obstacle_max_range: 3.0
-   ```
+```sh
+ros2 service call /fleet/nearby std_srvs/srv/Trigger
+# 2 robot(s) binnen 2.0 m: 4: 0.62 m links-voor; 7: 1.80 m achter (laatst gezien 6 s geleden)
+```
 
-   Let op: een oude positie wordt enkel gewist door de raytrace van de lidar.
-   In de lokale costmap gaat dat goed (de lidar ziet de vrijgekomen plek),
-   in de globale costmap niet - daar dus niet toevoegen.
+Straal: parameter `nearby_radius` (2 m). In code: `/fleet/poses` (PoseArray).
+
+**In de costmap: Nav2 KeepoutFilter met een bewegende mask.**
+`fleet_node` publiceert 2x/s een `OccupancyGrid` van 6 x 6 m rond de robot
+(`/fleet/keepout_mask`, map-frame) en de bijhorende `CostmapFilterInfo`
+(`/fleet/filter_info`, type keepout). Elke andere robot = volle schijf
+(waarde 100 -> lethal) met een aflopende rand van 25 cm; een oude positie
+hoogstens 70 (vermijden, maar niet verboden) en groter.
+
+![keepout mask](keepout_mask.png)
+
+```yaml
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      filters: ["fleet_filter"]
+      fleet_filter:
+        plugin: "nav2_costmap_2d::KeepoutFilter"
+        enabled: True
+        filter_info_topic: "/fleet/filter_info"
+        transform_tolerance: 0.2
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      filters: ["fleet_filter"]
+      fleet_filter:   # zelfde blok: dan plant de planner er ook omheen
+        plugin: "nav2_costmap_2d::KeepoutFilter"
+        enabled: True
+        filter_info_topic: "/fleet/filter_info"
+```
+
+Waarom een filter en geen observation source in de obstacle/voxel layer:
+
+| | obstacle/voxel layer (PointCloud2) | KeepoutFilter (mask) |
+|---|---|---|
+| oude posities | blijven staan tot de lidar ze wist; in de globale costmap nooit | elke mask volledig opnieuw getekend |
+| oud = zachter | niet (alles is lethal) | ja, waarde per cel |
+| inflatie | door de inflation layer | zit in de mask (de rand) - filters komen na de layers |
+| extra code | geen | geen C++, enkel de mask |
+
+Aandachtspunten (niet getest op een robot):
+- De mask is in `map`, de lokale costmap in `odom`: de filter transformeert
+  zelf (Jazzy: `transformPose` in `CostmapFilter`), dus TF map->odom moet er zijn.
+- De KeepoutFilter logt een melding bij elke nieuwe mask; daarom 2 Hz en niet 4.
+- Te dicht bij elkaar: staat de robot zelf al in de schijf van een andere,
+  dan wordt die afgetopt op 70, anders "zit hij in een obstakel" en weigert
+  de controller weg te rijden. Nieuwere Nav2-versies hebben daarvoor ook
+  `override_lethal_cost` / `lethal_override_cost` in de filter.
+- De eigen robot ziet de andere ook met de lidar (gewone obstacle layer); de
+  mask voegt toe wat achter een hoek zit en waar hij naartoe rijdt.
+- Mooiste vervolg: een eigen costmap-layer (C++, pluginlib) die ook het
+  geplande pad van de andere robot als "zachte" kost tekent.
+
+Eenvoudige extra veiligheidsregel (nog niet gebouwd): in `cmd_vel_guard`
+vooruit = 0 als een andere robot < 0,5 m in de rijrichting staat; bij een
+frontale ontmoeting wacht het hoogste nummer.
+
+Test zonder ROS: `python3 robot/test_fleet_core.py`.
 
 ## Fase 3 - showcase
 

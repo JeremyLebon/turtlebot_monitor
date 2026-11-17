@@ -12,7 +12,9 @@ de monitor-RPi komt (`git pull`). De pagina toont het naast de titel
   krijgen de andere robots terug. De pagina toont ze live op de kaart: spoor,
   gepland pad, doel, waarschuwing onder 0,5 m. `GET /api/fleet`. Testen
   zonder robots: `tools/fake_fleet.py`. Robotkant: `robot/fleet_node.py`
-  (hoort in turtlebot_docker). Uitleg en volgende fasen: `docs/vloot.md`.
+  (hoort in turtlebot_docker) met `fleet_core.py`: onthoudt de laatst gekende
+  posities, service `/fleet/nearby`, andere robots als obstakel via de Nav2
+  KeepoutFilter. Uitleg en volgende fasen: `docs/vloot.md`.
 
 ## 1.2.0 - 2026-11-18
 - **Historiek en gebeurtenissen** (`history.py`, `history.db`): de waarden van
