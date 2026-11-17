@@ -33,6 +33,7 @@ import csv
 import glob
 import io
 import json
+import math
 import os
 import re
 import secrets
@@ -151,6 +152,59 @@ def store_map(name, bundle):
     os.replace(path + ".tmp", path)
 
 robots = {}          # hostname -> {"data": payload, "seen": time, "addr": ip}
+
+# Vlootkaart: robots met Navigatie op een kaart uit de bibliotheek sturen ~4x/s
+# hun positie in het map-frame (fleet_node op de robot, POST /fleet). Het
+# antwoord bevat de andere robots op dezelfde kaart, zodat elke robot weet waar
+# de rest is - dat kan niet rechtstreeks, elke robot zit achter zijn eigen AP.
+fleet = {}           # hostname -> {"data": {...}, "t": time}
+FLEET_STALE_S = 3.0   # daarna grijs op de kaart
+FLEET_DROP_S = 30.0   # daarna weg
+FLEET_CLOSE_M = 0.5   # twee robots dichter dan dit: waarschuwing
+
+
+def _num(v, lo=-1e4, hi=1e4):
+    v = float(v)
+    if not (lo <= v <= hi):
+        raise ValueError("buiten bereik")
+    return round(v, 3)
+
+
+def fleet_clean(p):
+    """Pose report from a robot -> what the monitor keeps (numbers checked)."""
+    d = {"nr": str(p.get("nr") or "")[:4], "map": str(p.get("map") or "")[:40],
+         "x": _num(p["x"]), "y": _num(p["y"]), "yaw": round(math.atan2(math.sin(_num(p.get("yaw", 0))), math.cos(_num(p.get("yaw", 0)))), 3),
+         "v": _num(p.get("v", 0), -5, 5), "loc_ok": bool(p.get("loc_ok", True)),
+         "state": str(p.get("state") or "")[:20]}
+    g = p.get("goal")
+    d["goal"] = [_num(g[0]), _num(g[1])] if g else None
+    d["path"] = [[_num(q[0]), _num(q[1])] for q in (p.get("path") or [])[:60]]
+    return d
+
+
+def fleet_state(now=None):
+    now = now or time.time()
+    with lock:
+        items = list(fleet.items())
+    out = []
+    for name, f in items:
+        age = now - f["t"]
+        if age < FLEET_DROP_S:
+            out.append(dict(f["data"], robot=name, age=round(age, 1)))
+    return out
+
+
+def fleet_close(rs):
+    """Pairs of live robots on the same map closer than FLEET_CLOSE_M."""
+    live = [r for r in rs if r["age"] < FLEET_STALE_S]
+    out = []
+    for i, a in enumerate(live):
+        for b in live[i + 1:]:
+            d = ((a["x"] - b["x"]) ** 2 + (a["y"] - b["y"]) ** 2) ** 0.5
+            if a["map"] == b["map"] and d < FLEET_CLOSE_M:
+                out.append({"a": a["robot"], "b": b["robot"], "d": round(d, 2)})
+    return out
+
 lock = threading.Lock()
 pending = {}         # hostname -> [command, ...] waiting for the robot's poll
 polling = {}         # hostname -> time of the last poll (robot listens)
@@ -772,6 +826,19 @@ class Handler(BaseHTTPRequestHandler):
             err = wifitest_start(names, "samen" if mode == "samen" else "na elkaar", max(5, min(60, secs)), rate, down)
             return self._send(409 if err else 200, json.dumps({"error": err} if err else {"ok": True}),
                               "application/json")
+        if self.path == "/fleet":     # robot (fleet_node): own pose in, the others out
+            try:
+                p = self._read_json()
+                name = str(p["robot"])[:40]
+                d = fleet_clean(p)
+            except (ValueError, KeyError, TypeError, IndexError):
+                return self._send(400, "bad request", "text/plain")
+            now = time.time()
+            with lock:
+                fleet[name] = {"data": d, "t": now}
+            others = [{k: r[k] for k in ("robot", "nr", "x", "y", "yaw", "v", "age", "goal", "loc_ok")}
+                      for r in fleet_state(now) if r["robot"] != name and r["map"] == d["map"]]
+            return self._send(200, json.dumps({"t": now, "robots": others}), "application/json")
         if self.path != "/push":
             return self._send(404, "not found", "text/plain")
         try:
@@ -882,6 +949,11 @@ class Handler(BaseHTTPRequestHandler):
                                                    "size_mb": HIST.size_mb()}), "application/json")
             return self._send(200, json.dumps({"now": time.time(), "events": HIST.events(since, robot or None, 300)}),
                               "application/json")
+        if self.path == "/api/fleet":
+            rs = fleet_state()
+            return self._send(200, json.dumps({"now": time.time(), "robots": rs, "close": fleet_close(rs),
+                                               "stale_s": FLEET_STALE_S, "close_m": FLEET_CLOSE_M}),
+                              "application/json")
         if self.path == "/api/maps":
             return self._send(200, json.dumps(library()), "application/json")
         if self.path == "/api/versions":
@@ -951,6 +1023,12 @@ h1 { font-size:1.2rem; margin:0; }
 .warnmsg { margin-top:8px; padding:4px 8px; border-radius:6px; background:var(--yellow); color:#2a2000; font-size:.8rem; }
 .g { color:var(--green); } .y { color:var(--yellow); } .r { color:var(--red); }
 a { color:var(--accent); }
+.fleetwrap { display:grid; grid-template-columns:1fr 220px; gap:12px; margin-top:10px; }
+@media (max-width:700px) { .fleetwrap { grid-template-columns:1fr; } }
+#fleetCanvas { width:100%; background:#14161a; border:1px solid var(--border); border-radius:8px; display:block; }
+.fleetrow { display:flex; gap:8px; align-items:center; margin-bottom:6px; font-size:.85rem; }
+.fleetrow .dot { flex:none; width:24px; height:24px; border-radius:50%; color:#0b0d10; font-weight:700;
+                 display:inline-flex; align-items:center; justify-content:center; font-size:.8rem; }
 .bar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; background:var(--card); border:1px solid var(--border);
        border-radius:12px; padding:8px 12px; margin-bottom:14px; }
 button, select { background:#262a31; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:4px 10px;
@@ -1044,6 +1122,13 @@ details.bar summary { cursor:pointer; }
   <div class="sub" style="margin:6px 0">Afgeleid uit de statusberichten: offline/online, herstart, onderspanning, batterij, wifi,
   toestand, diensten, OpenCR/USB, ROS-fouten. Tik op een robot voor zijn historiek met grafieken.</div>
   <div class="evlist" id="evAll"></div></details>
+<details class="bar" id="fleetBox" style="display:none;margin-top:14px" open><summary id="fleetSum"></summary>
+  <div class="fleetwrap"><canvas id="fleetCanvas"></canvas>
+    <div><select id="fleetMap" style="display:none;margin-bottom:6px" title="Robots rijden op verschillende kaarten: welke tonen?"></select>
+      <div id="fleetSide"></div>
+      <p class="sub">Robots met <b>Navigatie</b> op een kaart uit de bibliotheek. Elke robot krijgt de posities van de andere
+      terug (<code>/fleet/robots</code> in RViz of Lichtblick). Stippellijn = gepland pad, kruis = doel, rood = te dicht bij elkaar.</p></div>
+  </div></details>
 <details class="bar" id="chanBox" style="display:none;margin-top:14px"><summary id="chanSum"></summary><div id="chanBody"></div></details>
 <details class="bar" id="wtBox" style="display:none;margin-top:14px"><summary id="wtSum"></summary>
   <div id="wtCtl" class="sub" style="margin-top:8px">
@@ -2096,6 +2181,159 @@ document.addEventListener("click", function (e) {
   if (h) { e.preventDefault(); e.stopPropagation(); openHistory(h.dataset.hist); }
 }, true);
 
+// ---- Vlootkaart: robots met Navigatie op een kaart uit de bibliotheek (POST /fleet) ----
+var FLEET_COLORS = ["#58a6ff", "#3fb950", "#e3b341", "#f778ba", "#a371f7", "#ff7b38", "#39c5cf", "#d2a8ff", "#7ee787", "#ffa198"];
+var fleet = { j: null, map: null, pick: "", cache: {}, trail: {}, view: null };
+function fleetColor(r) { var n = parseInt(r.nr, 10); return FLEET_COLORS[((isNaN(n) ? 0 : n) + 9) % FLEET_COLORS.length]; }
+function parseMapBundle(b) {
+  // yaml: enkel resolution, origin, negate, free/occupied_thresh nodig
+  function yv(k, d) { var m = new RegExp("^" + k + ":\\s*(.+)$", "m").exec(b.yaml); return m ? m[1].trim() : d; }
+  var origin = JSON.parse(yv("origin", "[0,0,0]").replace(/\s+/g, ""));
+  var res = parseFloat(yv("resolution", "0.05")), negate = yv("negate", "0") === "1";
+  var occT = parseFloat(yv("occupied_thresh", "0.65")), freeT = parseFloat(yv("free_thresh", "0.25"));
+  var bin = atob(b.pgm_b64), pos = 0, tok = [];
+  while (tok.length < 4) {      // P5 <w> <h> <maxval>, met mogelijke #commentaar
+    while (/\s/.test(bin[pos])) pos++;
+    if (bin[pos] === "#") { while (bin[pos] !== "\n") pos++; continue; }
+    var t = ""; while (!/\s/.test(bin[pos])) t += bin[pos++];
+    tok.push(t);
+  }
+  pos++;
+  var w = +tok[1], h = +tok[2], maxv = +tok[3];
+  var cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+  var ctx = cv.getContext("2d"), img = ctx.createImageData(w, h);
+  var x0 = w, y0 = h, x1 = 0, y1 = 0;
+  for (var i = 0; i < w * h; i++) {
+    var p = bin.charCodeAt(pos + i) / maxv, occ = negate ? p : 1 - p, c;
+    if (occ > occT) c = [215, 219, 224]; else if (occ < freeT) c = [44, 50, 59]; else c = [29, 32, 38];
+    img.data.set([c[0], c[1], c[2], 255], i * 4);
+    if (occ > occT || occ < freeT) { var x = i % w, y = (i / w) | 0; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  }
+  ctx.putImageData(img, 0, 0);
+  if (x1 < x0) { x0 = 0; y0 = 0; x1 = w - 1; y1 = h - 1; }
+  return { name: b.name, canvas: cv, w: w, h: h, res: res, ox: origin[0], oy: origin[1],
+           box: [x0, y0, x1 + 1, y1 + 1], zones: b.zones || [] };
+}
+function fleetLoadMap(name) {
+  if (fleet.cache[name] !== undefined) return;
+  fleet.cache[name] = null;   // bezig
+  fetch("/maps/" + encodeURIComponent(name)).then(function (x) {
+    if (!x.ok) throw new Error(); return x.json();
+  }).then(function (b) { fleet.cache[name] = parseMapBundle(b); drawFleet(); })
+    .catch(function () { fleet.cache[name] = false; drawFleet(); });
+}
+function refreshFleet() {
+  fetch("/api/fleet").then(function (x) { return x.json(); }).then(function (j) {
+    fleet.j = j;
+    var now = Date.now() / 1000;
+    j.robots.forEach(function (r) {    // spoor: laatste 40 s, enkel verse posities
+      if (r.age > j.stale_s) return;
+      var t = fleet.trail[r.robot] = fleet.trail[r.robot] || [], last = t[t.length - 1];
+      if (!last || Math.hypot(last[0] - r.x, last[1] - r.y) > 0.03) t.push([r.x, r.y, now]);
+      while (t.length && now - t[0][2] > 40) t.shift();
+    });
+    var count = {};
+    j.robots.forEach(function (r) { if (r.map) count[r.map] = (count[r.map] || 0) + 1; });
+    var maps = Object.keys(count).sort(function (a, b) { return count[b] - count[a]; });
+    fleet.map = fleet.pick && count[fleet.pick] ? fleet.pick : maps[0] || null;
+    fleet.maps = maps; fleet.count = count;
+    if (fleet.map) fleetLoadMap(fleet.map);
+    drawFleet();
+  }).catch(function () {});
+}
+function drawFleet() {
+  var j = fleet.j, box = document.getElementById("fleetBox");
+  if (!j) return;
+  box.style.display = j.robots.length ? "" : "none";
+  if (!j.robots.length) return;
+  var rs = j.robots.filter(function (r) { return r.map === fleet.map; })
+    .sort(function (a, b) { return Number(a.nr) - Number(b.nr); });
+  var live = rs.filter(function (r) { return r.age < j.stale_s; }).length;
+  var close = j.close.filter(function (c) { return rs.some(function (r) { return r.robot === c.a; }); });
+  document.getElementById("fleetSum").innerHTML = fxIcon("maps") + " <b>Vlootkaart</b> " +
+    '<span class="sub">' + esc(fleet.map || "") + " · " + live + "/" + rs.length + " robots live</span>" +
+    (close.length ? ' <span class="r">⚠ ' + close.map(function (c) {
+      return esc(c.a) + " ↔ " + esc(c.b) + " " + c.d.toFixed(2) + " m"; }).join(", ") + "</span>" : "");
+  var sel = document.getElementById("fleetMap");
+  if (document.activeElement !== sel) sel.innerHTML = fleet.maps.map(function (m) {
+    return '<option value="' + esc(m) + '"' + (m === fleet.map ? " selected" : "") + ">" + esc(m) + " (" + fleet.count[m] + ")</option>"; }).join("");
+  sel.style.display = fleet.maps.length > 1 ? "" : "none";
+  document.getElementById("fleetSide").innerHTML = rs.map(function (r) {
+    var st = r.age >= j.stale_s ? '<span class="sub">' + Math.round(r.age) + " s niets</span>"
+      : !r.loc_ok ? '<span class="y">lokalisatie?</span>' : r.goal ? (Math.abs(r.v) > 0.01 ? "rijdt naar doel" : "draait / wacht") : "staat stil";
+    return '<div class="fleetrow"><span class="dot" style="background:' + (r.age >= j.stale_s ? "#555" : fleetColor(r)) + '">' +
+      esc(String(r.nr || "?")) + "</span><span>" + esc(r.robot) + '<br><span class="sub">' + st +
+      " · " + Math.abs(r.v).toFixed(2) + " m/s</span></span></div>";
+  }).join("") + (j.robots.length > rs.length ? '<div class="sub" style="margin-top:6px">' + (j.robots.length - rs.length) +
+    " robot(s) op een andere kaart</div>" : "");
+  var cv = document.getElementById("fleetCanvas"), m = fleet.map && fleet.cache[fleet.map];
+  var W = cv.clientWidth, H = Math.min(520, Math.max(260, window.innerHeight * 0.55)), dpr = window.devicePixelRatio || 1;
+  cv.style.height = H + "px"; cv.width = W * dpr; cv.height = H * dpr;
+  var ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+  if (!m) {
+    ctx.fillStyle = "#8b939e"; ctx.font = "14px system-ui";
+    ctx.fillText(m === false ? "Kaart '" + fleet.map + "' staat niet in de kaartenbibliotheek - robots zonder achtergrond."
+      : "kaart laden...", 12, 24);
+  }
+  // wereld -> scherm: kaart passend in het canvas (enkel het gekende deel)
+  var bx = m ? m.box : null, s, tx, ty;
+  if (m) {
+    var bw = (bx[2] - bx[0]) * m.res, bh = (bx[3] - bx[1]) * m.res;
+    s = Math.min((W - 20) / bw, (H - 20) / bh);
+    var wx0 = m.ox + bx[0] * m.res, wy1 = m.oy + (m.h - bx[1]) * m.res;
+    tx = function (x) { return 10 + (x - wx0) * s + ((W - 20) - bw * s) / 2; };
+    ty = function (y) { return 10 + (wy1 - y) * s + ((H - 20) - bh * s) / 2; };
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(m.canvas, bx[0], bx[1], bx[2] - bx[0], bx[3] - bx[1], tx(wx0), ty(wy1), bw * s, bh * s);
+  } else {   // geen kaart: passend rond de robots
+    var xs = rs.map(function (r) { return r.x; }), ys = rs.map(function (r) { return r.y; });
+    var mx = Math.min.apply(null, xs) - 1, Mx = Math.max.apply(null, xs) + 1, my = Math.min.apply(null, ys) - 1, My = Math.max.apply(null, ys) + 1;
+    s = Math.min(W / (Mx - mx), (H - 40) / (My - my));
+    tx = function (x) { return (x - mx) * s; }; ty = function (y) { return 40 + (My - y) * s; };
+  }
+  var R = Math.max(0.14 * s, 12);    // TurtleBot3 Burger ~0.14 m straal
+  rs.forEach(function (r) {
+    var col = r.age >= j.stale_s ? "#555" : fleetColor(r), t = fleet.trail[r.robot] || [];
+    ctx.lineWidth = 2; ctx.globalAlpha = 0.45; ctx.strokeStyle = col; ctx.beginPath();
+    t.forEach(function (p, i) { ctx[i ? "lineTo" : "moveTo"](tx(p[0]), ty(p[1])); }); ctx.stroke();
+    ctx.globalAlpha = 0.8;
+    if (r.path && r.path.length && r.age < j.stale_s) {
+      ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(tx(r.x), ty(r.y));
+      r.path.forEach(function (p) { ctx.lineTo(tx(p[0]), ty(p[1])); }); ctx.stroke(); ctx.setLineDash([]);
+    }
+    if (r.goal && r.age < j.stale_s) {
+      var gx = tx(r.goal[0]), gy = ty(r.goal[1]); ctx.lineWidth = 3; ctx.beginPath();
+      ctx.moveTo(gx - 6, gy - 6); ctx.lineTo(gx + 6, gy + 6); ctx.moveTo(gx + 6, gy - 6); ctx.lineTo(gx - 6, gy + 6); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  });
+  close.forEach(function (c) {
+    var a = rs.filter(function (r) { return r.robot === c.a; })[0], b = rs.filter(function (r) { return r.robot === c.b; })[0];
+    if (!a || !b) return;
+    ctx.strokeStyle = "#f85149"; ctx.lineWidth = 2; ctx.beginPath();
+    ctx.arc(tx((a.x + b.x) / 2), ty((a.y + b.y) / 2), R * 2.2, 0, 2 * Math.PI); ctx.stroke();
+  });
+  rs.forEach(function (r) {
+    var col = r.age >= j.stale_s ? "#555" : fleetColor(r), x = tx(r.x), y = ty(r.y);
+    ctx.save(); ctx.translate(x, y); ctx.rotate(-r.yaw);
+    ctx.fillStyle = col; ctx.strokeStyle = "#0b0d10"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(R * 1.7, 0); ctx.lineTo(R * 0.6, -R * 0.8); ctx.lineTo(R * 0.6, R * 0.8); ctx.closePath();
+    ctx.fill(); ctx.stroke();     // neus = rijrichting
+    ctx.beginPath(); ctx.arc(0, 0, R, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = "#0b0d10"; ctx.font = "bold " + Math.round(R * 1.1) + "px system-ui"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(String(r.nr || "?"), x, y + 1);
+    if (!r.loc_ok && r.age < j.stale_s) { ctx.fillStyle = "#e3b341"; ctx.fillText("?", x + R * 1.3, y - R * 1.1); }
+  });
+  ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+  if (m) {   // schaalbalk 1 m
+    ctx.strokeStyle = "#8b939e"; ctx.fillStyle = "#8b939e"; ctx.lineWidth = 2; ctx.font = "12px system-ui";
+    ctx.beginPath(); ctx.moveTo(14, H - 14); ctx.lineTo(14 + s, H - 14); ctx.stroke(); ctx.fillText("1 m", 18 + s, H - 10);
+  }
+}
+document.getElementById("fleetMap").addEventListener("change", function (e) { fleet.pick = e.target.value; refreshFleet(); });
+window.addEventListener("resize", drawFleet);
+refreshFleet(); setInterval(refreshFleet, 500);
 refresh(); setInterval(refresh, 2000);
 refreshLib(); setInterval(refreshLib, 5000);
 </script></body></html>

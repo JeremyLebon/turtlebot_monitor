@@ -21,6 +21,10 @@ Tot november 2026 zat de monitor in de map `monitor/` van `turtlebot_setup`; de
 geschiedenis is meegekomen. De oude inhoud van deze repo (DDS/domain_bridge)
 staat in de branch `dds-oud`.
 
+**Vlootkaart** (concept, v1.2.0): robots met Navigatie op dezelfde kaart uit
+de bibliotheek verschijnen live op één kaart en weten van elkaar waar ze
+zijn. Zie `docs/vloot.md`; testen zonder robots met `tools/fake_fleet.py`.
+
 ## 1. Adres instellen (eenmalig)
 
 1. Geef de laptop of de RPi (optie E) een **vast IP** op het subnet van de

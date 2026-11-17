@@ -6,6 +6,14 @@ de monitor-RPi komt (`git pull`). De pagina toont het naast de titel
 ("v1.0.0 · e46ac83", met de commit van de clone), de log bij het starten,
 `/api/robots` in het veld `version`.
 
+## 1.3.0 - 2026-11-18
+- **Vlootkaart** (concept): robots met Navigatie
+  op een kaart uit de bibliotheek sturen hun positie naar `POST /fleet` en
+  krijgen de andere robots terug. De pagina toont ze live op de kaart: spoor,
+  gepland pad, doel, waarschuwing onder 0,5 m. `GET /api/fleet`. Testen
+  zonder robots: `tools/fake_fleet.py`. Robotkant: `robot/fleet_node.py`
+  (hoort in turtlebot_docker). Uitleg en volgende fasen: `docs/vloot.md`.
+
 ## 1.2.0 - 2026-11-18
 - **Historiek en gebeurtenissen** (`history.py`, `history.db`): de waarden van
   elke robot (elke 10 s, 30 dagen) en gebeurtenissen die de monitor afleidt uit
