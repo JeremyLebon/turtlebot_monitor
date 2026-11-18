@@ -7,7 +7,8 @@ en stopt hem mee; enkel met een monitor (MONITOR_URL), niet als
 de kaartenbibliotheek op alle robots = hetzelfde map-frame):
 
   * stuurt hij 4x/s zijn positie (TF map -> base_footprint), snelheid, doel en
-    gepland pad naar de monitor: POST <monitor>/fleet;
+    gepland pad naar de monitor: POST <monitor>/fleet; ook de AMCL-ellips, en
+    1x/s de lokale costmap als de monitor erom vraagt (vlootkaart, 1.10.5);
   * krijgt hij in het antwoord de andere robots op dezelfde kaart terug en
     ONTHOUDT ze (fleet_core.FleetMemory): valt de monitor weg, dan blijven de
     laatst gekende posities staan, met een groeiende onzekerheid, tot 15 s;
@@ -48,7 +49,7 @@ from std_srvs.srv import Trigger
 from tf2_ros import Buffer, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 
-from fleet_core import FleetMemory, describe, keepout_mask, nearby
+from fleet_core import FleetMemory, amcl_ellipse, costmap_to_map, describe, keepout_mask, nearby
 
 try:                                   # zelfde map als map_bundle.py op de robot
     from map_bundle import running_map
@@ -58,6 +59,7 @@ except ImportError:                    # concept los getest: kaartnaam via param
 # zelfde kleuren als de vlootkaart op de monitor (index = nr)
 COLORS = ["#58a6ff", "#3fb950", "#e3b341", "#f778ba", "#a371f7", "#ff7b38", "#39c5cf", "#d2a8ff", "#7ee787", "#ffa198"]
 LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
+LAST_ONLY = QoSProfile(depth=1, durability=DurabilityPolicy.VOLATILE, reliability=ReliabilityPolicy.RELIABLE)
 
 
 def color(nr, a=1.0, grey=False):
@@ -100,6 +102,11 @@ class FleetNode(Node):
         self.v = 0.0
         self.plan = None                # (time, [[x, y], ...])
         self.loc_ok = True
+        self.loc = None                 # AMCL-ellips (amcl_ellipse) voor de vlootkaart
+        # lokale costmap naar de monitor, enkel als die erom vraagt (robot gekozen
+        # op de vlootkaart + "costmap"): het antwoord op POST /fleet zegt het,
+        # zonder vraag 5 s -> abonnement weg (geen CPU als niemand kijkt)
+        self.cm_sub, self.cm_msg, self.cm_want_until, self.cm_sent = None, None, 0.0, 0.0
         self.map_name, self.map_checked = None, 0.0
         self.busy, self.backoff = False, 0.0
         self.lock = threading.Lock()    # memory: HTTP-thread schrijft, timers lezen
@@ -133,6 +140,22 @@ class FleetNode(Node):
     def _on_amcl(self, msg):
         c = msg.pose.covariance
         self.loc_ok = math.sqrt(max(0.0, c[0] + c[7])) < 0.25     # ~25 cm onzekerheid
+        self.loc = amcl_ellipse(c)
+
+    def _on_costmap(self, msg):
+        self.cm_msg = msg
+
+    def _costmap_body(self):
+        """Lokale costmap (frame odom) als raster in map rond de robot, of None."""
+        m = self.cm_msg
+        try:
+            t = self.tf.lookup_transform(self.map_frame, m.header.frame_id, Time())
+        except Exception:
+            return None
+        o = m.info.origin.position
+        grid = {"w": m.info.width, "h": m.info.height, "res": m.info.resolution, "ox": o.x, "oy": o.y, "data": m.data}
+        tr = t.transform.translation
+        return costmap_to_map(grid, (tr.x, tr.y, yaw_of(t.transform.rotation)), self.own)
 
     def _current_map(self):
         now = time.monotonic()
@@ -155,11 +178,23 @@ class FleetNode(Node):
             self.own = None
             self.tf_since = None
         mp = self._current_map()
+        now = time.monotonic()
+        want_cm = now < self.cm_want_until
+        if want_cm and self.cm_sub is None:
+            self.cm_sub = self.create_subscription(OccupancyGrid, "/local_costmap/costmap", self._on_costmap, LAST_ONLY)
+        elif not want_cm and self.cm_sub is not None:
+            self.destroy_subscription(self.cm_sub)
+            self.cm_sub, self.cm_msg = None, None
         if self.url and mp and self.own and not self.busy and time.monotonic() >= self.backoff:
             plan = self.plan if self.plan and time.monotonic() - self.plan[0] < 3.0 else None
             body = {"robot": self.robot, "nr": self.nr, "map": mp,
                     "x": self.own[0], "y": self.own[1], "yaw": self.own[2], "v": self.v, "loc_ok": self.loc_ok,
-                    "goal": plan[1][-1] if plan else None, "path": plan[1] if plan else []}
+                    "goal": plan[1][-1] if plan else None, "path": plan[1] if plan else [], "loc": self.loc}
+            if want_cm and self.cm_msg is not None and now - self.cm_sent >= 1.0:   # 1x/s, ~1,4 kB
+                cm = self._costmap_body()
+                if cm:
+                    body["costmap"] = cm
+                    self.cm_sent = now
             self.busy = True
             threading.Thread(target=self._post, args=(body,), daemon=True).start()
         self._publish_markers()
@@ -172,6 +207,8 @@ class FleetNode(Node):
                 reply = json.loads(r.read())
             with self.lock:
                 self.memory.update(reply.get("robots", []), time.monotonic())
+            if reply.get("costmap"):
+                self.cm_want_until = time.monotonic() + 5.0
         except Exception:
             self.backoff = time.monotonic() + 2.0       # monitor weg: geheugen houdt de rest
         finally:

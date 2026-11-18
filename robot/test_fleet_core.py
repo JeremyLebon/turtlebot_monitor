@@ -4,7 +4,8 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from fleet_core import FleetMemory, describe, keepout_mask, nearby  # noqa: E402
+from fleet_core import FleetMemory, amcl_ellipse, costmap_to_map, describe, keepout_mask, nearby  # noqa: E402
+import base64  # noqa: E402
 
 
 def test_memory_keeps_and_grows_and_forgets():
@@ -79,6 +80,34 @@ def test_mask_too_close_stays_lethal():
     # te dicht: blijft 100, Nav2 maakt er 252 van zodat de robot weg kan (override_lethal_cost)
     other = [{"robot": "a", "x": 0.2, "y": 0.0, "grow": 0, "stale": False}]
     assert _at(keepout_mask((0, 0, 0), other), 0.2, 0.0) == 100
+
+
+def test_amcl_ellipse():
+    cov = [0.0] * 36
+    cov[0], cov[7], cov[35] = 0.04, 0.01, 0.0025       # 20 cm langs x, 10 cm langs y, 0,05 rad
+    e = amcl_ellipse(cov)
+    assert abs(e["a"] - 0.2) < 1e-9 and abs(e["b"] - 0.1) < 1e-9 and abs(e["ang"]) < 1e-9 and abs(e["syaw"] - 0.05) < 1e-9
+    cov[0], cov[7] = 0.01, 0.04                        # grote as langs y
+    assert abs(amcl_ellipse(cov)["ang"] - math.pi / 2) < 1e-3
+
+
+def _cm_at(cm, x, y):
+    data = base64.b64decode(cm["b64"])
+    return data[int((y - cm["oy"]) / cm["res"]) * cm["w"] + int((x - cm["ox"]) / cm["res"])]
+
+
+def test_costmap_to_map_rotated_and_shifted():
+    # costmap in odom: 2 x 2 m, 0,05 m, obstakel (100) in de cel rond odom (0,5; 0)
+    w = h = 40
+    data = [0] * (w * h)
+    data[int((0.0 + 1.0) / 0.05) * w + int((0.5 + 1.0) / 0.05)] = 100
+    data[0] = -1
+    grid = {"w": w, "h": h, "res": 0.05, "ox": -1.0, "oy": -1.0, "data": data}
+    # odom staat in map op (2, 1), 90 graden gedraaid: odom (0,5; 0) = map (2; 1,5)
+    cm = costmap_to_map(grid, (2.0, 1.0, math.pi / 2), (2.0, 1.0))
+    assert cm["w"] == 32 and _cm_at(cm, 1.95, 1.55) == 100
+    assert _cm_at(cm, 2.5, 1.0) == 0                   # niet waar het zonder draaiing zou staan
+    assert _cm_at(cm, 0.5, -0.5) == 255                # buiten de costmap: onbekend
 
 
 if __name__ == "__main__":

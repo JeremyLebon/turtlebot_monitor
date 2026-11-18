@@ -10,7 +10,11 @@
   Nav2 KeepoutFilter: per andere robot een dodelijke schijf (beide stralen +
   marge, verlengd in zijn rijrichting) met een rand zoals de inflation layer. Elke update wordt de mask volledig opnieuw getekend,
   dus oude posities blijven niet hangen (het probleem van een obstacle layer).
+* amcl_ellipse(): onzekerheid van AMCL als ellips, voor de vlootkaart.
+* costmap_to_map(): de lokale costmap (frame odom) als klein raster in het
+  map-frame, voor de vlootkaart (enkel als de monitor erom vraagt).
 """
+import base64
 import math
 
 V_MAX = 0.22          # TurtleBot3 Burger, m/s
@@ -125,3 +129,47 @@ def keepout_mask(own, others, robot_radius=0.14, margin=0.4, safety=0.05, lead_s
                 if v > data[k]:
                     data[k] = v
     return ox, oy, n, n, data
+
+
+def amcl_ellipse(cov):
+    """AMCL-covariantie (6x6, rij per rij) -> {"a", "b", "ang", "syaw"}:
+    standaardafwijkingen langs de assen van de ellips (m), hoek van de grote
+    as (rad) en de onzekerheid van de richting (rad). Zelfde formule als
+    nav_web_node.loc_from_amcl (Navigatie-pagina)."""
+    cxx, cxy, cyy, cyaw = cov[0], cov[1], cov[7], cov[35]
+    mid, half = (cxx + cyy) / 2, math.hypot((cxx - cyy) / 2, cxy)
+    return {"a": round(math.sqrt(max(mid + half, 0.0)), 3), "b": round(math.sqrt(max(mid - half, 0.0)), 3),
+            "ang": round(0.5 * math.atan2(2 * cxy, cxx - cyy), 3), "syaw": round(math.sqrt(max(cyaw, 0.0)), 3)}
+
+
+def costmap_to_map(grid, frame_in_map, center, size=3.2, res=0.1):
+    """Costmap (OccupancyGrid in zijn eigen frame, bv. odom) -> raster van
+    size x size m rond `center` in het map-frame, cellen van `res` m.
+
+    grid: {"w", "h", "res", "ox", "oy", "data"} (data 0..100, -1 = onbekend,
+    rij 0 = onderaan); frame_in_map: (x, y, yaw) van dat frame in map.
+    Per cel het maximum van 4 punten, zodat een dunne muur niet wegvalt.
+    Geeft {"ox", "oy", "res", "w", "h", "b64"} terug: bytes 0..100,
+    255 = onbekend, rij 0 = onderaan."""
+    n = int(round(size / res))
+    ox = math.floor((center[0] - size / 2) / res) * res
+    oy = math.floor((center[1] - size / 2) / res) * res
+    tx, ty, yaw = frame_in_map
+    c, s = math.cos(yaw), math.sin(yaw)
+    gw, gh, gr, gox, goy, data = grid["w"], grid["h"], grid["res"], grid["ox"], grid["oy"], grid["data"]
+    q = res / 4
+    out = bytearray(n * n)
+    for j in range(n):
+        for i in range(n):
+            best = -1
+            for dx, dy in ((-q, -q), (q, -q), (-q, q), (q, q)):
+                px, py = ox + (i + 0.5) * res + dx - tx, oy + (j + 0.5) * res + dy - ty
+                gi = int(math.floor((c * px + s * py - gox) / gr))     # map -> frame: R(-yaw)
+                gj = int(math.floor((-s * px + c * py - goy) / gr))
+                if 0 <= gi < gw and 0 <= gj < gh:
+                    v = data[gj * gw + gi]
+                    if v > best:
+                        best = v
+            out[j * n + i] = 255 if best < 0 else min(100, best)
+    return {"ox": round(ox, 3), "oy": round(oy, 3), "res": res, "w": n, "h": n,
+            "b64": base64.b64encode(bytes(out)).decode()}

@@ -6,6 +6,23 @@ de monitor-RPi komt (`git pull`). De pagina toont het naast de titel
 ("v1.0.0 · e46ac83", met de commit van de clone), de log bij het starten,
 `/api/robots` in het veld `version`.
 
+## 1.6.0 - 2026-11-18
+Vraagt robot-image 1.10.5+ (oudere robots: geen ellips, costmap of knoppen).
+- **AMCL-onzekerheid op de vlootkaart** (vinkje): ellips (2 sigma, zoals de
+  Navigatie-pagina) en een waaier voor de onzekerheid van de richting; groen
+  goed, geel twijfel, rood kwijt (grenzen van nav_web_node).
+- **Costmap van de gekozen robot** (vinkje): de lokale costmap zoals Nav2 de
+  wereld ziet, met de andere robots erin (paars = kost, roze = obstakel,
+  blauw = robot raakt). Enkel van de gekozen robot en zolang je kijkt: de
+  pagina vraagt het om de 4 s (`POST /api/fleet_costmap`), de monitor zegt het
+  in het antwoord op `/fleet`, de robot stuurt 1x/s ~1,4 kB.
+- **Bijsturen**: onder de kaart bij de gekozen robot (na Docent aanmelden)
+  knoppen 45 graden links/rechts, 25 cm vooruit, 15 cm achteruit en Stop
+  (opdracht `nav_nudge`, Stop = `nav_cancel`). Stapjes met de Nav2-gedragingen,
+  die zelf stoppen voor een obstakel; geen live joystick (de opdrachten gaan
+  via de polling met wisselende vertraging).
+- `robot/` gelijk met robot-image 1.10.5.
+
 ## 1.5.5 - 2026-11-18
 - **Zones op de vlootkaart** (vinkje "Zones tonen", onthouden per browser):
   - de zones van de kaart uit de kaartbundel: verboden zones en muren (rood),

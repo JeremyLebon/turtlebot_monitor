@@ -28,6 +28,7 @@ in de firewall (privénetwerk) wanneer daarom gevraagd wordt.
 """
 import argparse
 import base64
+import binascii
 import hashlib
 import csv
 import glob
@@ -158,6 +159,8 @@ robots = {}          # hostname -> {"data": payload, "seen": time, "addr": ip}
 # antwoord bevat de andere robots op dezelfde kaart, zodat elke robot weet waar
 # de rest is - dat kan niet rechtstreeks, elke robot zit achter zijn eigen AP.
 fleet = {}           # hostname -> {"data": {...}, "t": time}
+fleet_cm = {}        # hostname -> last local costmap {"ox", "oy", "res", "w", "h", "b64", "t"} (1.6.0)
+fleet_cm_want = {}   # hostname -> until when a page wants to see its costmap
 FLEET_STALE_S = 3.0   # daarna grijs op de kaart
 FLEET_DROP_S = 30.0   # daarna weg
 FLEET_CLOSE_M = 0.5   # twee robots dichter dan dit: waarschuwing
@@ -179,7 +182,25 @@ def fleet_clean(p):
     g = p.get("goal")
     d["goal"] = [_num(g[0]), _num(g[1])] if g else None
     d["path"] = [[_num(q[0]), _num(q[1])] for q in (p.get("path") or [])[:60]]
+    loc = p.get("loc")    # AMCL ellipse (robot 1.10.5+): sigma along the axes, angle, sigma of the heading
+    try:   # clipped, never refused: a lost robot (huge ellipse) must stay on the map
+        d["loc"] = {k: round(max(-50.0, min(50.0, float(loc[k]))), 3) for k in ("a", "b", "ang", "syaw")}
+        if any(v != v for v in d["loc"].values()):   # NaN
+            d["loc"] = None
+    except (TypeError, KeyError, ValueError):
+        d["loc"] = None
     return d
+
+
+def fleet_costmap(p):
+    """Local costmap from a robot (only when asked, robot 1.10.5+): map-aligned grid, checked."""
+    c = p.get("costmap")
+    if not isinstance(c, dict):
+        return None
+    w, h = int(c["w"]), int(c["h"])
+    if not (0 < w <= 80 and 0 < h <= 80) or len(base64.b64decode(c["b64"])) != w * h:
+        raise ValueError
+    return {"ox": _num(c["ox"]), "oy": _num(c["oy"]), "res": _num(c["res"], 0.01, 1), "w": w, "h": h, "b64": str(c["b64"])}
 
 
 def fleet_state(now=None):
@@ -215,7 +236,7 @@ REMOTE_CONTROL = False
 VIEW_ONLY = False
 ROBOT_COMMANDS = {"stop_all", "beep", "update", "reboot", "shutdown", "map_upload", "map_download", "set_pin",
                   "wifitest", "rollback", "install_version", "nav_goal", "nav_cancel",
-                  "nav_start", "nav_pose"} | {
+                  "nav_start", "nav_pose", "nav_nudge"} | {
     a + ":" + n for a in ("start", "stop") for n in ("bringup", "slam", "navigation", "camera", "joystick")}
 
 
@@ -798,6 +819,8 @@ class Handler(BaseHTTPRequestHandler):
             arg = r.get("arg")
             if (cmd.startswith("map_") or cmd == "nav_start") and not MAP_NAME_RE.match(str(arg or "")):
                 return self._send(400, "ongeldige kaartnaam", "text/plain")
+            if cmd == "nav_nudge" and arg not in ("left", "right", "fwd", "back"):
+                return self._send(400, json.dumps({"error": "ongeldige richting"}), "application/json")
             if cmd == "install_version" and not VERSION_TAG_RE.match(str(arg or "")):
                 return self._send(400, "ongeldige versie", "text/plain")
             if cmd in ("nav_goal", "nav_pose"):   # vlootkaart: {"x", "y", "yaw"} in the map frame, one robot
@@ -845,11 +868,25 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, KeyError, TypeError, IndexError):
                 return self._send(400, "bad request", "text/plain")
             now = time.time()
+            try:
+                cm = fleet_costmap(p)
+            except (ValueError, KeyError, TypeError, binascii.Error):
+                cm = None
             with lock:
+                if cm:
+                    fleet_cm[name] = dict(cm, t=now)
                 fleet[name] = {"data": d, "t": now}
             others = [{k: r[k] for k in ("robot", "nr", "x", "y", "yaw", "v", "age", "goal", "loc_ok")}
                       for r in fleet_state(now) if r["robot"] != name and r["map"] == d["map"]]
-            return self._send(200, json.dumps({"t": now, "robots": others}), "application/json")
+            return self._send(200, json.dumps({"t": now, "robots": others,
+                                               "costmap": fleet_cm_want.get(name, 0) > now}), "application/json")
+        if self.path == "/api/fleet_costmap":   # page: show the costmap of this robot (asked again every few s)
+            try:
+                name = str(self._read_json()["robot"])[:40]
+            except (ValueError, KeyError, TypeError):
+                return self._send(400, "bad request", "text/plain")
+            fleet_cm_want[name] = time.time() + 8
+            return self._send(200, json.dumps({"ok": True}), "application/json")
         if self.path != "/push":
             return self._send(404, "not found", "text/plain")
         try:
@@ -962,6 +999,12 @@ class Handler(BaseHTTPRequestHandler):
                               "application/json")
         if self.path == "/api/fleet":
             rs = fleet_state()
+            now = time.time()
+            with lock:
+                cms = {n: c for n, c in fleet_cm.items() if now - c["t"] < 3 and fleet_cm_want.get(n, 0) > now}
+            for r in rs:
+                if r["robot"] in cms:
+                    r["costmap"] = cms[r["robot"]]
             return self._send(200, json.dumps({"now": time.time(), "robots": rs, "close": fleet_close(rs),
                                                "stale_s": FLEET_STALE_S, "close_m": FLEET_CLOSE_M}),
                               "application/json")
@@ -1145,12 +1188,17 @@ details.bar summary { cursor:pointer; }
     <button data-fz="fit" title="Hele kaart">&#x2922;</button></div></div><div class="fleetgoal" id="fleetGoal"></div></div>
     <div><label class="sub" style="display:flex;gap:6px;align-items:center;margin-bottom:6px;cursor:pointer"
       title="Zones van de kaart (verboden, muren, banen, snelheid) en de vlootzone rond elke robot (waar een andere robot niet mag komen)"><input type="checkbox" id="fleetZones" checked> Zones tonen</label>
+      <label class="sub" style="display:flex;gap:6px;align-items:center;margin-bottom:6px;cursor:pointer"
+      title="Ellips = waar AMCL denkt dat de robot staat (2 sigma), waaier = onzekerheid van de richting. Groen goed, geel twijfel, rood kwijt."><input type="checkbox" id="fleetLoc" checked> AMCL-onzekerheid</label>
+      <label class="sub" style="display:flex;gap:6px;align-items:center;margin-bottom:6px;cursor:pointer"
+      title="Lokale costmap van de gekozen robot (1x/s, enkel zolang je kijkt): zoals Nav2 de wereld ziet, met de andere robots erin"><input type="checkbox" id="fleetCm"> Costmap van gekozen robot</label>
       <select id="fleetMap" style="display:none;margin-bottom:6px" title="Robots rijden op verschillende kaarten: welke tonen?"></select>
       <div id="fleetSide"></div>
       <p class="sub">Robots met <b>Navigatie</b> op een kaart uit de bibliotheek. Elke robot krijgt de posities van de andere
       terug (<code>/fleet/robots</code> in RViz of Lichtblick). Stippellijn = gepland pad, kruis = doel, rood = te dicht bij elkaar.
       Zones: rood = verboden zone / muur, groen = voorkeursbaan, blauw = snelheid; gekleurde vlek rond een robot = zijn
-      vlootzone (daar mag een andere robot niet komen, schuift mee vooruit als hij rijdt).</p></div>
+      vlootzone (daar mag een andere robot niet komen, schuift mee vooruit als hij rijdt). Ellips + waaier = AMCL-onzekerheid
+      van positie en richting. Costmap: paars = kost, roze = obstakel, blauw = robot raakt.</p></div>
   </div></details>
 <details class="bar" id="chanBox" style="display:none;margin-top:14px"><summary id="chanSum"></summary><div id="chanBody"></div></details>
 <details class="bar" id="wtBox" style="display:none;margin-top:14px"><summary id="wtSum"></summary>
@@ -2377,7 +2425,9 @@ function drawFleet() {
     ctx.drawImage(m.canvas, bx[0], bx[1], bx[2] - bx[0], bx[3] - bx[1], tx(wx0), ty(wy1), bw * S, bh * S);
   }
   if (m && fleet.zones) fleetDrawMapZones(ctx, m.zones, tx, ty, S);
+  if (fleet.showCm) fleetDrawCostmap(ctx, rs, tx, ty, S);
   if (fleet.zones) fleetDrawRobotZones(ctx, rs, j, tx, ty, S);
+  if (fleet.showLoc) fleetDrawLoc(ctx, rs, j, tx, ty, S);
   var R = Math.max(0.14 * S, 12);    // TurtleBot3 Burger ~0.14 m straal
   // inverse (screen -> map) for picking a robot and a goal with the pointer
   fleet.view = { R: R, rs: rs, tx: tx, ty: ty, hasMap: !!m, W: W, H: H,
@@ -2503,6 +2553,74 @@ function fleetDrawRobotZones(ctx, rs, j, tx, ty, S) {
   });
 }
 
+// ---- AMCL-onzekerheid en costmap op de vlootkaart (1.6.0, robot-image 1.10.5) ----
+// Ellips: 2 sigma langs de assen (zoals de Navigatie-pagina), waaier: richting
+// +- 2 sigma. Kwaliteit met de grenzen van nav_web_node (LOC_GOOD 0,30 m /
+// 0,35 rad, LOC_DOUBT 0,6 / 0,6). Costmap: enkel van de gekozen robot; de pagina
+// vraagt hem om de 4 s opnieuw (/api/fleet_costmap), de robot stuurt 1x/s.
+function fleetPref(key, dflt) { try { var v = localStorage.getItem(key); return v === null ? dflt : v === "1"; } catch (e) { return dflt; } }
+fleet.showLoc = fleetPref("fleetLoc", true); fleet.showCm = fleetPref("fleetCm", false);
+[["fleetLoc", "showLoc"], ["fleetCm", "showCm"]].forEach(function (k) {
+  var el = document.getElementById(k[0]);
+  el.checked = fleet[k[1]];
+  el.addEventListener("change", function () {
+    fleet[k[1]] = el.checked;
+    try { localStorage.setItem(k[0], el.checked ? "1" : "0"); } catch (e) {}
+    if (k[1] === "showCm") fleetAskCostmap();
+    drawFleet();
+  });
+});
+function fleetAskCostmap() {
+  if (fleet.showCm && fleet.sel && fleet.selR)
+    fetch("/api/fleet_costmap", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ robot: fleet.sel }) }).catch(function () {});
+}
+setInterval(fleetAskCostmap, 4000);
+function fleetLocColor(l) {
+  return l.a <= 0.30 && l.syaw <= 0.35 ? "#3fb950" : l.a <= 0.6 && l.syaw <= 0.6 ? "#e3b341" : "#e5484d";
+}
+function fleetDrawLoc(ctx, rs, j, tx, ty, S) {
+  rs.forEach(function (r) {
+    var l = r.loc;
+    if (!l || r.age >= j.stale_s) return;
+    var x = tx(r.x), y = ty(r.y), col = fleetLocColor(l);
+    ctx.save(); ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.5;
+    ctx.globalAlpha = 0.9; ctx.beginPath();
+    ctx.ellipse(x, y, Math.max(2 * l.a * S, 2), Math.max(2 * l.b * S, 2), -l.ang, 0, 2 * Math.PI); ctx.stroke();
+    ctx.globalAlpha = 0.15; ctx.fill();
+    var L = Math.max(0.45 * S, 30), w = Math.min(Math.PI, 2 * l.syaw);   // waaier: richting +- 2 sigma
+    ctx.globalAlpha = 0.25; ctx.beginPath(); ctx.moveTo(x, y);
+    ctx.arc(x, y, L, -(r.yaw || 0) - w, -(r.yaw || 0) + w); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  });
+}
+fleet.cmCache = {};
+function fleetCostmapCanvas(c) {
+  if (fleet.cmCache.b64 === c.b64) return fleet.cmCache.cv;
+  var bin = atob(c.b64), cv = document.createElement("canvas"); cv.width = c.w; cv.height = c.h;
+  var x2 = cv.getContext("2d"), img = x2.createImageData(c.w, c.h);
+  for (var j = 0; j < c.h; j++) for (var i = 0; i < c.w; i++) {
+    var v = bin.charCodeAt(j * c.w + i), k = ((c.h - 1 - j) * c.w + i) * 4, col;   // rij 0 = onderaan
+    if (v === 255 || v === 0) continue;
+    if (v >= 100) col = [255, 40, 140, 170];          // dodelijk
+    else if (v >= 99) col = [60, 200, 255, 150];      // ingeschreven (robot raakt)
+    else col = [170, 90, 255, Math.round(30 + v * 1.2)];
+    img.data.set(col, k);
+  }
+  x2.putImageData(img, 0, 0);
+  fleet.cmCache = { b64: c.b64, cv: cv };
+  return cv;
+}
+function fleetDrawCostmap(ctx, rs, tx, ty, S) {
+  var r = rs.filter(function (q) { return q.robot === fleet.sel && q.costmap; })[0];
+  if (!r) return;
+  var c = r.costmap;
+  ctx.save(); ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(fleetCostmapCanvas(c), tx(c.ox), ty(c.oy + c.h * c.res), c.w * c.res * S, c.h * c.res * S);
+  ctx.strokeStyle = "rgba(170,90,255,0.6)"; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
+  ctx.strokeRect(tx(c.ox), ty(c.oy + c.h * c.res), c.w * c.res * S, c.h * c.res * S);
+  ctx.restore();
+}
+
 // ---- Vlootkaart: robot kiezen en een doel geven (1.4.0) ----
 // Tik op een robot (of zijn naam rechts) om hem te kiezen, tik dan op de kaart
 // voor het doel; slepen vanaf het doel zet de eindrichting. "Rij erheen" stuurt
@@ -2550,7 +2668,7 @@ function fleetTwo() {
     fleet.prePending = fleet.pending;
     if (e.button === 1 || e.button === 2) { fleet.pan = { px: p[0], py: p[1] }; return; }
     var hit = control ? fleetHit(p[0], p[1]) : null;
-    if (hit) { fleet.sel = hit.robot === fleet.sel ? null : hit.robot; fleet.pending = null; fleet.mode = "goal"; drawFleet(); return; }
+    if (hit) { fleet.sel = hit.robot === fleet.sel ? null : hit.robot; fleet.pending = null; fleet.mode = "goal"; drawFleet(); fleetAskCostmap(); return; }
     var selR = fleet.selR, mode = control ? fleetTapMode() : null;
     if (!mode) { fleet.pan = { px: p[0], py: p[1] }; return; }
     var x = v.ix(p[0]), y = v.iy(p[1]);
@@ -2598,6 +2716,7 @@ function fleetTwo() {
 document.getElementById("fleetSide").addEventListener("click", function (e) {
   var row = e.target.closest("[data-fleetsel]"); if (!row || !control) return;
   fleet.sel = row.dataset.fleetsel === fleet.sel ? null : row.dataset.fleetsel; fleet.pending = null; fleet.mode = "goal"; drawFleet();
+  fleetAskCostmap();
 });
 function fleetDeg(a) { var d = Math.round(a * 180 / Math.PI); return (d + 360) % 360; }
 // ---- Vlootkaart: Navigatie starten en beginpositie (1.5.0) ----
@@ -2638,7 +2757,7 @@ function fleetTapMode() {   // what a tap on the map sets for the selected robot
 }
 function fleetXY(p) { return "x " + p.x.toFixed(2).replace(".", ",") + " m, y " + p.y.toFixed(2).replace(".", ",") + " m, richting " + fleetDeg(p.yaw) + "°"; }
 function renderFleetGoal() {
-  var box = document.getElementById("fleetGoal"), html, selR = fleet.selR, st = fleet.selSt, pg = fleet.pending,
+  var box = document.getElementById("fleetGoal"), html, nudge = "", selR = fleet.selR, st = fleet.selSt, pg = fleet.pending,
       mode = fleetTapMode(), hasMap = fleet.view && fleet.view.hasMap;
   if (!control) html = '<span class="sub">Docent aanmelden om robots te sturen.</span>';
   else if (!fleet.sel) html = '<span class="sub">Tik op een robot (op de kaart of rechts) om hem te kiezen. Zoomen: muiswiel, twee vingers of +/&minus;; slepen = verschuiven.</span>';
@@ -2662,8 +2781,15 @@ function renderFleetGoal() {
             : '<span class="sub">tik op de kaart voor het doel</span>') +
         (selR.goal ? ' <button data-fcancel="1">Huidig doel annuleren</button>' : "") +
         (hasMap && !fleetOld(fleetRobot(fleet.sel)) ? ' <button data-fmode="pose">Beginpositie</button>' : "");
+      var iv = imageNum(fleetRobot(fleet.sel));
+      if (iv === null || iv >= 1010005)   // bijsturen: robot-image 1.10.5+
+        nudge = '<div style="flex-basis:100%;display:flex;flex-wrap:wrap;gap:6px;align-items:center"><span class="sub">Bijsturen:</span>' +
+          '<button data-fn="left" title="45° naar links draaien">&#x21B6; 45°</button><button data-fn="fwd" title="25 cm vooruit">&#x2191; 25 cm</button>' +
+          '<button data-fn="back" title="15 cm achteruit">&#x2193; 15 cm</button><button data-fn="right" title="45° naar rechts draaien">&#x21B7; 45°</button>' +
+          '<button class="stop" data-fstop="1" title="Stopt het bijsturen en een lopend doel">Stop</button>' +
+          '<span class="sub">(Nav2 stopt zelf voor een obstakel)</span></div>';
     }
-    html += ' <button data-fdesel="1">Klaar</button>';
+    html += ' <button data-fdesel="1">Klaar</button>' + nudge;
     // the robot's answer to the last fleet command (otherwise only in its opened tile)
     var res = (fleetRobot(fleet.sel) || {}).result, now = (lastJ || {}).now || Date.now() / 1000;
     if (res && /^nav_/.test(res.cmd || "") && now - res.t < 300)
@@ -2692,7 +2818,8 @@ document.getElementById("fleetGoal").addEventListener("click", function (e) {
   }
   else if (b.dataset.fmode) { fleet.mode = b.dataset.fmode; fleet.pending = null; drawFleet(); }
   else if (b.dataset.fclear) { fleet.pending = null; drawFleet(); }
-  else if (b.dataset.fcancel) fleetCmd("nav_cancel").then(function () { refresh(); });
+  else if (b.dataset.fcancel || b.dataset.fstop) fleetCmd("nav_cancel").then(function () { refresh(); });
+  else if (b.dataset.fn) fleetCmd("nav_nudge", b.dataset.fn).then(function () { refresh(); });
   else if (b.dataset.fdesel) { fleet.sel = null; fleet.pending = null; fleet.mode = "goal"; drawFleet(); }
 });
 document.getElementById("fleetMap").addEventListener("change", function (e) { fleet.pick = e.target.value; refreshFleet(); });
