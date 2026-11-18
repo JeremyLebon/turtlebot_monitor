@@ -1484,6 +1484,16 @@ document.getElementById("verAll").addEventListener("change", function (e) {
 fillVerAll();
 // Robot state from the launches (the active control source itself isn't in
 // the monitor payload): what the class is doing at a glance
+// 5 V input of the Pi 5 (PMIC EXT5V_V; a snapshot every 5 s: short dips are only
+// seen through get_throttled, bit 16 = under-voltage since boot)
+function v5Text(s) {
+  var v = s.ext5v_v, thr = s.throttled || 0;
+  if (v == null) return "--";
+  var c = v < 4.75 ? "r" : v < 4.85 ? "y" : "g";
+  return '<span class="' + c + '" title="5V-ingang van de Pi (PMIC), momentopname elke 5 s. Onder ~4,63 V meldt de Pi onderspanning.">' +
+    v.toFixed(2).replace(".", ",") + " V</span>" +
+    (thr & 0x10000 ? ' <span class="y" title="get_throttled 0x' + thr.toString(16) + '">· onderspanning sinds opstart</span>' : "");
+}
 function robotState(l) {
   if (!l.bringup) return ["Inactief", ""];
   if (l.navigation) return ["Navigatie", "g"];
@@ -1616,6 +1626,8 @@ function tile(r, now, common) {
     if (l.bringup && l.robot_node === false) msgs.push("OpenCR antwoordt niet (batterij? USB?)");
     if (s.cpu_temp_c > 80) msgs.push("CPU " + Math.round(s.cpu_temp_c) + " °C");
     if (s.throttled & 1) msgs.push("Onderspanning van de Pi (voeding/batterij)");
+    else if (s.throttled & 0x10000) warns.push("onderspanning gehad sinds de opstart");
+    if (s.ext5v_v != null && s.ext5v_v < 4.85) warns.push("5V-voeding laag: " + s.ext5v_v.toFixed(2).replace(".", ",") + " V");
     if (b[1] === "y") warns.push("batterij bijna leeg");
     if (s.wifi_signal_dbm != null && s.wifi_signal_dbm < -72) warns.push("zwakke wifi");
     if (d.nav && d.nav.state === "aborted") warns.push("navigatie mislukt");
@@ -1651,6 +1663,7 @@ function tile(r, now, common) {
     (online ? '<div class="kv">' +
       "<span>Toestand</span><span class=\"" + st[1] + "\">" + st[0] + "</span>" +
       "<span>Batterij</span><span class=\"" + b[1] + "\">" + b[0] + "</span>" +
+      "<span>5V Pi</span><span>" + v5Text(s) + "</span>" +
       "<span>CPU</span><span>" + cpuLoad(s) + ' · <span class="' + tc + '">' + temp + "</span></span>" +
       "<span>Wifi</span><span>" + (s.wifi_signal_dbm != null ? s.wifi_signal_dbm + " dBm" : "--") +
         (s.wifi_band ? '<br><span title="' + s.wifi_freq_mhz + ' MHz">' + esc(s.wifi_band) + " kanaal " + s.wifi_channel +
@@ -2085,6 +2098,8 @@ function loadHistory() {
 setInterval(function () { if (histState && histState.hours <= 4) loadHistory(); }, 15000);
 var H_CHARTS = [
   { key: ["battery_v"], name: "Batterij (V)", col: ["var(--green)"], lines: [[11.0, "var(--red)"], [11.4, "var(--yellow)"]], min: 10.8, max: 12.8, fmt: function (v) { return v.toFixed(2).replace(".", ",") + " V"; } },
+  { key: ["ext5v"], name: "5V-voeding van de Pi (V; < 4,85 V waarschuwing, ~4,63 V meldt de Pi onderspanning)", col: ["var(--green)"],
+    lines: [[4.85, "var(--yellow)"], [4.63, "var(--red)"]], min: 4.6, max: 5.25, fmt: function (v) { return v.toFixed(2).replace(".", ",") + " V"; } },
   { key: ["wifi_dbm"], name: "Wifi (dBm)", col: ["var(--accent)"], lines: [[-72, "var(--yellow)"]], min: -90, max: -30, fmt: function (v) { return Math.round(v) + " dBm"; } },
   { key: ["cpu_use", "cpu_temp"], name: "CPU-gebruik (%) en temperatuur (°C)", col: ["var(--accent)", "var(--red)"], lines: [[80, "var(--red)"]], min: 0, max: 100,
     fmt: function (v, i) { return Math.round(v) + (i ? " °C" : " %"); } },
@@ -2172,6 +2187,7 @@ function cursorAt(svg, e) {
     var g = function (k) { return best[cols.indexOf(k)]; };
     out = hTime(best[0], true) + " · " + (g("state") || "") +
       (g("battery_v") != null ? " · " + g("battery_v").toFixed(2).replace(".", ",") + " V" : "") +
+      (g("ext5v") != null ? " · 5V " + g("ext5v").toFixed(2).replace(".", ",") + " V" : "") +
       (g("wifi_dbm") != null ? " · wifi " + g("wifi_dbm") + " dBm" + (g("wifi_ch") ? " (kanaal " + g("wifi_ch") + ")" : "") : "") +
       (g("cpu_use") != null ? " · CPU " + Math.round(g("cpu_use")) + " %" : "") + (g("cpu_temp") != null ? " · " + Math.round(g("cpu_temp")) + " °C" : "") +
       (g("throttled") ? " · throttled 0x" + g("throttled").toString(16) : "");

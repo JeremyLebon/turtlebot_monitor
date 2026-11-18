@@ -19,6 +19,16 @@ de monitor-RPi komt (`git pull`). De pagina toont het naast de titel
   of route, punt n/m, onderweg/gepauzeerd/mislukt, resterende afstand;
   waarschuwing "navigatie mislukt".
 
+## 1.2.1 - 2026-11-18
+- **5V-voeding van de Pi** (`ext5v_v`, de PMIC-meting die de robots al
+  meestuurden): in de opengeklapte tegel (rij *5V Pi*), waarschuwing onder
+  4,85 V en als de Pi sinds de opstart onderspanning had (get_throttled bit 16).
+  In de historiek een grafiek met lijnen op 4,85 V en 4,63 V, en een gebeurtenis
+  bij een dip onder 4,85 V (fout onder 4,75 V, hoogstens 1 per minuut). Een
+  bestaande `history.db` krijgt de kolom er vanzelf bij.
+- Beperking: de robot meet elke 5 s één keer; kortere dips zie je enkel via
+  "onderspanning sinds opstart".
+
 ## 1.2.0 - 2026-11-18
 - **Historiek en gebeurtenissen** (`history.py`, `history.db`): de waarden van
   elke robot (elke 10 s, 30 dagen) en gebeurtenissen die de monitor afleidt uit
