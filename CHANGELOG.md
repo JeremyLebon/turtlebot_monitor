@@ -6,6 +6,16 @@ de monitor-RPi komt (`git pull`). De pagina toont het naast de titel
 ("v1.0.0 · e46ac83", met de commit van de clone), de log bij het starten,
 `/api/robots` in het veld `version`.
 
+## 1.2.0 - 2026-11-18
+- **Historiek en gebeurtenissen** (`history.py`, `history.db`): de waarden van
+  elke robot (elke 10 s, 30 dagen) en gebeurtenissen die de monitor afleidt uit
+  de statusberichten: offline/online, Pi herstart, onderspanning, batterij,
+  wifi, toestand, diensten, OpenCR/USB, ROS-fouten, software. Onder de tegels
+  de gebeurtenissen van de laatste 24 u; per robot de knop Historiek met
+  grafieken, gebeurtenissen en CSV-export. Uitleg in README.md.
+- De vlootkaart (branch `feature/vlootkaart`, daar nog 1.2.0) wordt bij het
+  mergen 1.3.0.
+
 ## 1.1.6 - 2026-11-18
 - **Fout: op de kiosk werd je ~5 s na Docent aanmelden weer afgemeld.** Een tweede,
   onzichtbaar kioskvenster of -tabblad deelt de aanmeldcookie, maar niemand raakt

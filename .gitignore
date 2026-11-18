@@ -16,3 +16,6 @@ update_log.txt
 .self_update
 sessions.json
 sessions.json.tmp
+history.db
+history.db-wal
+history.db-shm

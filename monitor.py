@@ -43,6 +43,8 @@ import urllib.request
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import history
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -383,6 +385,18 @@ def host_ips():
 # Monitor on its own RPi (install_rpi.sh): the container asks the host to shut
 # down or reboot through a file in this folder; a systemd path unit on the RPi
 # acts on it. POWER_MARK exists only there, so the buttons show only there.
+HIST = None          # history.History (history.db), opened in main()
+
+
+def history_loop():
+    while True:
+        time.sleep(5)
+        try:
+            HIST.tick()
+        except Exception as exc:   # e.g. SD card full: keep the monitor running
+            print("historiek: %s" % exc)
+
+
 SESSIONS_FILE = os.path.join(HERE, "sessions.json")   # not in git; survives a container restart
 
 
@@ -769,6 +783,11 @@ class Handler(BaseHTTPRequestHandler):
         with lock:
             robots[name] = {"data": payload, "seen": time.time(), "addr": self.client_address[0]}
         self._send(200, "ok", "text/plain")
+        if HIST:
+            try:
+                HIST.on_push(name, payload)
+            except Exception as exc:
+                print("historiek: %s" % exc)
 
     def _wifitest_upload(self):
         q = urllib.parse.parse_qs(self.path.split("?", 1)[1])
@@ -839,6 +858,30 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, "kaart niet in de bibliotheek", "text/plain")
             with open(path, "rb") as f:
                 return self._send(200, f.read(), "application/json")
+        if self.path.startswith(("/api/history", "/api/events")) and HIST:
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            robot = q.get("robot", [""])[0][:40]
+            try:
+                hours = max(0.05, min(24 * 31, float(q.get("hours", ["24"])[0])))
+            except ValueError:
+                hours = 24
+            since = time.time() - hours * 3600
+            if self.path.startswith("/api/history.csv"):
+                body = HIST.csv(robot, since).encode("utf-8-sig")   # BOM: Excel reads the accents
+                self.send_response(200)
+                self.send_header("Content-Type", "text/csv; charset=utf-8")
+                self.send_header("Content-Disposition", 'attachment; filename="historiek_%s_%s.csv"'
+                                 % (re.sub(r"[^\w-]", "_", robot), time.strftime("%Y%m%d_%H%M")))
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                return self.wfile.write(body)
+            if self.path.startswith("/api/history"):
+                return self._send(200, json.dumps({"robot": robot, "now": time.time(), "since": since,
+                                                   "samples": HIST.samples(robot, since),
+                                                   "events": HIST.events(since, robot, 400),
+                                                   "size_mb": HIST.size_mb()}), "application/json")
+            return self._send(200, json.dumps({"now": time.time(), "events": HIST.events(since, robot or None, 300)}),
+                              "application/json")
         if self.path == "/api/maps":
             return self._send(200, json.dumps(library()), "application/json")
         if self.path == "/api/versions":
@@ -915,6 +958,23 @@ button, select { background:#262a31; color:var(--text); border:1px solid var(--b
 button:hover { border-color:var(--accent); }
 button.stop { background:var(--red); border-color:var(--red); color:#2a0d0d; font-weight:700; }
 button.hot { background:var(--yellow); border-color:var(--yellow); color:#2a2000; font-weight:600; }
+.histov { position:fixed; inset:0; z-index:40; background:rgba(0,0,0,.6); display:flex; align-items:flex-start;
+  justify-content:center; overflow:auto; padding:16px; }
+.histbox { background:var(--card); border:1px solid var(--border); border-radius:12px; width:min(1100px,100%); padding:14px 16px; }
+.histbar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:8px; }
+.histbar h2 { font-size:1.1rem; margin:0 10px 0 0; }
+.histbar button.on { background:var(--accent); border-color:var(--accent); color:#0b1a2b; font-weight:600; }
+.histbar .x { margin-left:auto; font-size:1.2rem; padding:2px 12px; }
+.hchart { position:relative; margin-top:4px; }
+.hchart svg { display:block; width:100%; height:auto; touch-action:pan-y; }
+.hchart .lbl { position:absolute; left:4px; top:0; font-size:.75rem; color:var(--muted); pointer-events:none; }
+.hreadout { min-height:1.4em; font-size:.85rem; color:var(--muted); margin:4px 0; font-variant-numeric:tabular-nums; }
+.evlist { margin-top:10px; max-height:40vh; overflow:auto; border-top:1px solid var(--border); }
+.evlist .ev { display:grid; grid-template-columns:auto auto 1fr; gap:8px; padding:5px 2px; border-bottom:1px solid var(--border); font-size:.85rem; }
+.evlist .ev time { color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.evlist .ev b.rob { cursor:pointer; color:var(--accent); }
+.evdot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:2px; vertical-align:middle; }
+.evdot.error { background:var(--red); } .evdot.warn { background:var(--yellow); } .evdot.info { background:var(--accent); }
 .idlewarn { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:50; background:var(--yellow); color:#2a2000; font-weight:600; padding:14px 22px; border-radius:12px; font-size:1.05rem; cursor:pointer; box-shadow:0 4px 18px rgba(0,0,0,.5); }
 button:disabled, select:disabled { opacity:.4; cursor:default; }
 .btns { display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; }
@@ -980,6 +1040,10 @@ details.bar summary { cursor:pointer; }
 </div>
 <div class="bar" id="updBox" style="display:none"></div>
 <div class="grid" id="grid"></div>
+<details class="bar" id="evBox" style="margin-top:14px;display:block"><summary id="evSum">Gebeurtenissen (laatste 24 u)</summary>
+  <div class="sub" style="margin:6px 0">Afgeleid uit de statusberichten: offline/online, herstart, onderspanning, batterij, wifi,
+  toestand, diensten, OpenCR/USB, ROS-fouten. Tik op een robot voor zijn historiek met grafieken.</div>
+  <div class="evlist" id="evAll"></div></details>
 <details class="bar" id="chanBox" style="display:none;margin-top:14px"><summary id="chanSum"></summary><div id="chanBody"></div></details>
 <details class="bar" id="wtBox" style="display:none;margin-top:14px"><summary id="wtSum"></summary>
   <div id="wtCtl" class="sub" style="margin-top:8px">
@@ -1519,6 +1583,7 @@ function tile(r, now, common) {
       rosErrList(rosErrs) +
       (chg.length ? '<div class="info" title="' + esc(chg.map(function (c) { return "- " + c.text; }).join("\n")) + '">' +
         chg.length + " aanpassing(en) t.o.v. de standaard (details: muis erop)</div>" : "") + controls(r) : "") +
+    '<div style="margin-top:8px"><button data-hist="' + esc(r.robot) + '">Historiek (grafieken en gebeurtenissen)</button></div>' +
     '<div class="sub" style="margin-top:8px">' + (KIOSK ? "statuspagina" :
       '<a href="http://10.0.' + Number(r.nr) + '.10:8080/" target="_blank">statuspagina</a>') + " (wifi TB-AP-" + nr + ")</div></div>";
 }
@@ -1864,6 +1929,173 @@ document.getElementById("libFile").addEventListener("change", function (e) {
     if (j.error) alert("Niet toegevoegd: " + j.error); refreshLib(); e.target.value = "";
   });
 });
+
+// ---------------------------------------------------------------- historiek
+// Per robot: grafieken (batterij, wifi, CPU, temperatuur, verkeer) en de
+// gebeurtenissen uit history.db. Tik/klik in een grafiek voor de waarden op
+// dat moment. Overlay i.p.v. nieuwe pagina: werkt op de kiosk zonder adresbalk.
+var HIST_RANGES = [[1, "1 u"], [4, "4 u"], [24, "24 u"], [168, "7 dagen"], [720, "30 dagen"]];
+var histState = null;
+function hTime(t, withDate) {
+  var d = new Date(t * 1000);
+  return (withDate ? d.toLocaleDateString("nl-BE", { day: "2-digit", month: "2-digit" }) + " " : "") +
+    d.toLocaleTimeString("nl-BE", { hour12: false, hour: "2-digit", minute: "2-digit", second: withDate ? undefined : "2-digit" });
+}
+function evRow(e, showRobot) {
+  return '<div class="ev"><time>' + hTime(e.t, true) + '</time><span>' +
+    (showRobot ? (e.robot === "monitor" ? "<b>monitor</b>" : '<b class="rob" data-hist="' + esc(e.robot) + '">' + esc(e.robot) + "</b>") : "") +
+    '</span><span><span class="evdot ' + esc(e.level) + '"></span> ' + esc(e.text) + "</span></div>";
+}
+function openHistory(robot, hours) {
+  closeHistory();
+  histState = { robot: robot, hours: hours || 4, data: null, cursor: null };
+  var ov = document.createElement("div"); ov.className = "histov"; ov.id = "histOv";
+  ov.innerHTML = '<div class="histbox"><div class="histbar"><h2></h2><span id="hRanges"></span>' +
+    '<a id="hCsv" class="sub" href="#">CSV</a><span class="sub" id="hSize"></span><button class="x" title="Sluiten">×</button></div>' +
+    '<div class="hreadout" id="hRead">Tik in een grafiek voor de waarden op dat moment.</div><div id="hCharts">laden...</div>' +
+    '<div class="sub" style="margin-top:10px">Gebeurtenissen</div><div class="evlist" id="hEv"></div></div>';
+  document.body.appendChild(ov);
+  ov.querySelector("h2").textContent = "Historiek " + robot;
+  ov.querySelector(".x").addEventListener("click", closeHistory);
+  ov.addEventListener("click", function (e) { if (e.target === ov) closeHistory(); });
+  ov.querySelector("#hRanges").innerHTML = HIST_RANGES.map(function (r) {
+    return '<button data-hours="' + r[0] + '">' + r[1] + "</button>";
+  }).join(" ");
+  ov.querySelectorAll("[data-hours]").forEach(function (b) {
+    b.addEventListener("click", function () { histState.hours = Number(b.dataset.hours); histState.cursor = null; loadHistory(); });
+  });
+  loadHistory();
+}
+function closeHistory() { var o = document.getElementById("histOv"); if (o) o.remove(); histState = null; }
+document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeHistory(); });
+function loadHistory() {
+  var st = histState; if (!st) return;
+  document.querySelectorAll("#hRanges [data-hours]").forEach(function (b) { b.classList.toggle("on", Number(b.dataset.hours) === st.hours); });
+  var q = "robot=" + encodeURIComponent(st.robot) + "&hours=" + st.hours;
+  document.getElementById("hCsv").href = "/api/history.csv?" + q;
+  fetch("/api/history?" + q).then(function (x) { return x.json(); }).then(function (d) {
+    if (histState !== st) return;
+    st.data = d; drawHistory();
+    document.getElementById("hSize").textContent = d.size_mb != null ? "historiek " + String(d.size_mb).replace(".", ",") + " MB" : "";
+    document.getElementById("hEv").innerHTML = d.events.length ? d.events.map(function (e) { return evRow(e, false); }).join("")
+      : '<div class="sub" style="padding:6px">Geen gebeurtenissen in deze periode.</div>';
+  }).catch(function () { document.getElementById("hCharts").textContent = "historiek niet bereikbaar"; });
+}
+setInterval(function () { if (histState && histState.hours <= 4) loadHistory(); }, 15000);
+var H_CHARTS = [
+  { key: ["battery_v"], name: "Batterij (V)", col: ["var(--green)"], lines: [[11.0, "var(--red)"], [11.4, "var(--yellow)"]], min: 10.8, max: 12.8, fmt: function (v) { return v.toFixed(2).replace(".", ",") + " V"; } },
+  { key: ["wifi_dbm"], name: "Wifi (dBm)", col: ["var(--accent)"], lines: [[-72, "var(--yellow)"]], min: -90, max: -30, fmt: function (v) { return Math.round(v) + " dBm"; } },
+  { key: ["cpu_use", "cpu_temp"], name: "CPU-gebruik (%) en temperatuur (°C)", col: ["var(--accent)", "var(--red)"], lines: [[80, "var(--red)"]], min: 0, max: 100,
+    fmt: function (v, i) { return Math.round(v) + (i ? " °C" : " %"); } },
+  { key: ["rx_kbps", "tx_kbps"], name: "Wifi-verkeer (kbit/s, ↓ naar en ↑ van de robot)", col: ["var(--accent)", "var(--yellow)"], lines: [], min: 0, max: null,
+    fmt: function (v, i) { return (i ? "↑ " : "↓ ") + (v < 1000 ? Math.round(v) + " kbit/s" : (v / 1000).toFixed(1).replace(".", ",") + " Mbit/s"); } }
+];
+var STATE_COL = { "inactief": "#3a4049", "bringup": "#2f6f9f", "kaart maken": "#8a6d1f", "navigatie": "#2f8f4f" };
+function drawHistory() {
+  var st = histState, d = st.data, box = document.getElementById("hCharts");
+  var cols = d.samples.columns, rows = d.samples.rows, ix = {};
+  cols.forEach(function (c, i) { ix[c] = i; });
+  var t1 = d.now, t0 = d.since, W = 1000, L = 44, R = 8, PW = W - L - R;
+  var X = function (t) { return L + (t - t0) / (t1 - t0) * PW; };
+  var gap = Math.max(40, (t1 - t0) / 300);    // no line across a gap (robot offline)
+  st.X = X; st.L = L; st.PW = PW; st.W = W;
+  // x axis ticks
+  var span = t1 - t0, step = [300, 900, 1800, 3600, 7200, 21600, 43200, 86400, 172800, 604800].find(function (s) { return span / s <= 8; }) || 604800;
+  var ticks = []; for (var tt = Math.ceil(t0 / step) * step; tt <= t1; tt += step) ticks.push(tt);
+  var evs = d.events.filter(function (e) { return e.level !== "info" || e.kind === "state" || e.kind === "online"; });
+  var html = "";
+  // state band
+  var band = "";
+  for (var i = 0; i < rows.length; i++) {
+    var a = rows[i][0], b = i + 1 < rows.length && rows[i + 1][0] - a < gap ? rows[i + 1][0] : a + Math.min(gap, 10);
+    band += '<rect x="' + X(a).toFixed(1) + '" y="0" width="' + Math.max(0.5, X(b) - X(a)).toFixed(1) + '" height="14" fill="' + (STATE_COL[rows[i][ix.state]] || "#3a4049") + '"/>';
+  }
+  html += '<div class="hchart"><svg viewBox="0 0 ' + W + ' 30"><text x="' + (L - 4) + '" y="11" text-anchor="end" fill="var(--muted)" font-size="10">toestand</text>' +
+    '<rect x="' + L + '" y="0" width="' + PW + '" height="14" fill="#22262c"/>' + band +
+    Object.keys(STATE_COL).map(function (k, j) {
+      return '<rect x="' + (L + j * 120) + '" y="19" width="10" height="10" fill="' + STATE_COL[k] + '"/><text x="' + (L + 14 + j * 120) + '" y="28" fill="var(--muted)" font-size="10">' + k + "</text>";
+    }).join("") + '<text x="' + (L + 4 * 120) + '" y="28" fill="var(--muted)" font-size="10">leeg = geen bericht (offline)</text></svg></div>';
+  H_CHARTS.forEach(function (c, ci) {
+    var H = 120, T = 8, B = 18, PH = H - T - B, lo = c.min, hi = c.max;
+    if (hi == null) { hi = 100; rows.forEach(function (r) { c.key.forEach(function (k) { var v = r[ix[k]]; if (v != null && v > hi) hi = v; }); }); hi *= 1.1; }
+    rows.forEach(function (r) { c.key.forEach(function (k) { var v = r[ix[k]]; if (v != null) { if (v < lo) lo = v; if (v > hi && c.max != null) hi = v; } }); });
+    var Y = function (v) { return T + (1 - (v - lo) / (hi - lo || 1)) * PH; };
+    var svg = '<svg viewBox="0 0 ' + W + " " + H + '" data-chart="' + ci + '">';
+    svg += '<rect x="' + L + '" y="' + T + '" width="' + PW + '" height="' + PH + '" fill="#191c21"/>';
+    [lo, (lo + hi) / 2, hi].forEach(function (v) {
+      svg += '<text x="' + (L - 4) + '" y="' + (Y(v) + 3) + '" text-anchor="end" fill="var(--muted)" font-size="10">' + (Math.abs(v) >= 100 ? Math.round(v) : Math.round(v * 10) / 10) + "</text>";
+    });
+    ticks.forEach(function (tt) {
+      svg += '<line x1="' + X(tt) + '" x2="' + X(tt) + '" y1="' + T + '" y2="' + (T + PH) + '" stroke="#2a2f36"/>' +
+        (ci === H_CHARTS.length - 1 ? "" : "");
+    });
+    c.lines.forEach(function (ln) {
+      if (ln[0] > lo && ln[0] < hi) svg += '<line x1="' + L + '" x2="' + (L + PW) + '" y1="' + Y(ln[0]) + '" y2="' + Y(ln[0]) + '" stroke="' + ln[1] + '" stroke-dasharray="4 4" opacity=".7"/>';
+    });
+    evs.forEach(function (e) {
+      if (e.level === "info") return;
+      svg += '<line x1="' + X(e.t) + '" x2="' + X(e.t) + '" y1="' + T + '" y2="' + (T + PH) + '" stroke="' + (e.level === "error" ? "var(--red)" : "var(--yellow)") + '" opacity=".55"/>';
+    });
+    c.key.forEach(function (k, ki) {
+      var path = "", prevT = null;
+      rows.forEach(function (r) {
+        var v = r[ix[k]]; if (v == null) { prevT = null; return; }
+        path += (prevT == null || r[0] - prevT > gap ? "M" : "L") + X(r[0]).toFixed(1) + " " + Y(Math.max(lo, Math.min(hi, v))).toFixed(1);
+        prevT = r[0];
+      });
+      if (path) svg += '<path d="' + path + '" fill="none" stroke="' + c.col[ki] + '" stroke-width="1.6"/>';
+    });
+    svg += '<line class="hcur" x1="0" x2="0" y1="' + T + '" y2="' + (T + PH) + '" stroke="#fff" opacity="0"/>';
+    ticks.forEach(function (tt) {
+      svg += '<text x="' + X(tt) + '" y="' + (H - 4) + '" text-anchor="middle" fill="var(--muted)" font-size="10">' + hTime(tt, span > 86400 * 1.5).replace(/:\d\d$/, "") + "</text>";
+    });
+    svg += "</svg>";
+    html += '<div class="hchart"><span class="lbl" style="left:' + (L / W * 100 + 0.5) + '%">' + esc(c.name) + "</span>" + svg + "</div>";
+  });
+  if (!rows.length) html += '<div class="sub" style="padding:8px">Nog geen waarden voor deze periode (de historiek begint bij monitor 1.2.0).</div>';
+  box.innerHTML = html;
+  box.querySelectorAll("svg").forEach(function (svg) {
+    svg.addEventListener("pointerdown", function (e) { cursorAt(svg, e); });
+    svg.addEventListener("pointermove", function (e) { if (e.buttons || e.pointerType === "mouse") cursorAt(svg, e); });
+  });
+}
+function cursorAt(svg, e) {
+  var st = histState; if (!st || !st.data) return;
+  var r = svg.getBoundingClientRect(), x = (e.clientX - r.left) / r.width * st.W;
+  if (x < st.L || x > st.L + st.PW) return;
+  var d = st.data, rows = d.samples.rows, cols = d.samples.columns, t = d.since + (x - st.L) / st.PW * (d.now - d.since);
+  var best = null; rows.forEach(function (row) { if (!best || Math.abs(row[0] - t) < Math.abs(best[0] - t)) best = row; });
+  document.querySelectorAll("#hCharts .hcur").forEach(function (l) { l.setAttribute("x1", x); l.setAttribute("x2", x); l.setAttribute("opacity", ".6"); });
+  var out = hTime(t, true);
+  if (best && Math.abs(best[0] - t) < Math.max(60, (d.now - d.since) / 200)) {
+    var g = function (k) { return best[cols.indexOf(k)]; };
+    out = hTime(best[0], true) + " · " + (g("state") || "") +
+      (g("battery_v") != null ? " · " + g("battery_v").toFixed(2).replace(".", ",") + " V" : "") +
+      (g("wifi_dbm") != null ? " · wifi " + g("wifi_dbm") + " dBm" + (g("wifi_ch") ? " (kanaal " + g("wifi_ch") + ")" : "") : "") +
+      (g("cpu_use") != null ? " · CPU " + Math.round(g("cpu_use")) + " %" : "") + (g("cpu_temp") != null ? " · " + Math.round(g("cpu_temp")) + " °C" : "") +
+      (g("throttled") ? " · throttled 0x" + g("throttled").toString(16) : "");
+  } else out += " · geen bericht (offline)";
+  var near = d.events.filter(function (ev) { return Math.abs(ev.t - t) < (d.now - d.since) / 100; });
+  if (near.length) out += " | " + near.slice(0, 3).map(function (ev) { return ev.text; }).join(" | ");
+  document.getElementById("hRead").textContent = out;
+}
+// all robots: events of the last 24 h under the tiles
+function refreshEvents() {
+  var box = document.getElementById("evBox"); if (!box) return;
+  fetch("/api/events?hours=24").then(function (x) { return x.json(); }).then(function (d) {
+    var evs = d.events || [], bad = evs.filter(function (e) { return e.level !== "info"; }).length;
+    document.getElementById("evSum").textContent = "Gebeurtenissen (laatste 24 u): " + evs.length + (bad ? ", waarvan " + bad + " waarschuwing(en)/fout(en)" : "");
+    if (box.open) document.getElementById("evAll").innerHTML = evs.length ? evs.slice(0, 150).map(function (e) { return evRow(e, true); }).join("")
+      : '<div class="sub" style="padding:6px">Nog geen gebeurtenissen.</div>';
+  }).catch(function () {});
+}
+document.getElementById("evBox").addEventListener("toggle", refreshEvents);
+refreshEvents(); setInterval(refreshEvents, 15000);
+document.addEventListener("click", function (e) {
+  var h = e.target.closest("[data-hist]");
+  if (h) { e.preventDefault(); e.stopPropagation(); openHistory(h.dataset.hist); }
+}, true);
+
 refresh(); setInterval(refresh, 2000);
 refreshLib(); setInterval(refreshLib, 5000);
 </script></body></html>
@@ -1892,6 +2124,13 @@ def main():
     REMOTE_CONTROL = args.remote_control
     VIEW_ONLY = args.view_only
     load_sessions()
+    global HIST
+    try:
+        HIST = history.History(os.path.join(HERE, "history.db"))
+        HIST.event("monitor", "monitor", "info", "Monitor gestart (%s)" % MONITOR_VERSION)
+        threading.Thread(target=history_loop, daemon=True).start()
+    except Exception as exc:
+        print("historiek uit: %s" % exc)
     threading.Thread(target=update_queue_loop, daemon=True).start()
     threading.Thread(target=config_loop, daemon=True).start()
     srv = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)

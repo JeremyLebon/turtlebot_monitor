@@ -213,6 +213,32 @@ bash ~/turtlebot_monitor/install_rpi.sh            # zelfde optie als eerst (--k
 
 Werkt alles, dan mag `~/turtlebot_monitor_oud` weg.
 
+## Historiek en gebeurtenissen (v1.2.0)
+
+De monitor bewaart wat de robots sturen in `history.db` (SQLite, naast
+`monitor.py`, niet in git; code in `history.py`):
+
+- **Waarden** per robot elke 10 s: batterij, wifi (dBm, kanaal), CPU-gebruik,
+  temperatuur, wifiverkeer, `throttled`, toestand, uptime. 7 dagen in detail,
+  daarna 1 per minuut, na 30 dagen weg. Ruwweg 40 kB per robot per uur dat hij
+  aan staat: met 9 robots hooguit ~100 MB.
+- **Gebeurtenissen**, afgeleid uit opeenvolgende berichten: offline (met de
+  laatste waarden) en online, Pi (her)opgestart, onderspanning/throttled,
+  batterij bijna leeg/leeg/gewisseld, zwakke wifi, kanaalwissel, CPU warm,
+  toestand (bringup, kaart maken, navigatie), dienst gestopt/gecrasht,
+  OpenCR/gamepad/camera weg of terug, nieuwe ROS-fouten, software bijgewerkt.
+  Ruisgevoelige waarden (wifi, temperatuur, batterij) pas na 30 s.
+
+Op de pagina: onder de tegels **Gebeurtenissen (laatste 24 u)** voor alle
+robots; in een opengeklapte tegel de knop **Historiek** met grafieken (1 u tot
+30 dagen, tik in een grafiek voor de waarden op dat moment), de gebeurtenissen
+van die robot en een CSV-export. Zo zie je wat er gebeurde vlak voor een robot
+uitviel. Op de RPi zelf: `python3 history.py [robot]` toont de gebeurtenissen
+van de laatste 24 u.
+
+API: `/api/history?robot=turtlebot09&hours=24`, `/api/events?hours=24`,
+`/api/history.csv?robot=turtlebot09&hours=24`.
+
 ## Testen
 
 - http://localhost:8090 toont alle robots uit `turtlebot_config.csv`, grijs
