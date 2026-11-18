@@ -214,7 +214,7 @@ cmd_seq = [0]
 REMOTE_CONTROL = False
 VIEW_ONLY = False
 ROBOT_COMMANDS = {"stop_all", "beep", "update", "reboot", "shutdown", "map_upload", "map_download", "set_pin",
-                  "wifitest", "rollback", "install_version"} | {
+                  "wifitest", "rollback", "install_version", "nav_goal", "nav_cancel"} | {
     a + ":" + n for a in ("start", "stop") for n in ("bringup", "slam", "navigation", "camera", "joystick")}
 
 
@@ -799,6 +799,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, "ongeldige kaartnaam", "text/plain")
             if cmd == "install_version" and not VERSION_TAG_RE.match(str(arg or "")):
                 return self._send(400, "ongeldige versie", "text/plain")
+            if cmd == "nav_goal":     # vlootkaart: {"x", "y", "yaw"} in the map frame, one robot
+                try:
+                    g = json.loads(arg) if isinstance(arg, str) else arg
+                    g = {k: float(g[k]) for k in ("x", "y", "yaw")}
+                    if len(names) != 1 or not all(abs(v) < 1000 for v in g.values()):
+                        raise ValueError
+                except (ValueError, KeyError, TypeError):
+                    return self._send(400, json.dumps({"error": "ongeldig doel"}), "application/json")
+                arg = json.dumps({k: round(v, 3) for k, v in g.items()})
             queue_command([str(n)[:40] for n in names], cmd, arg)
             return self._send(200, json.dumps({"queued": len(names)}), "application/json")
         if self.path.startswith("/wifitest/upload?"):   # robot: wifitest data, counted and dropped
@@ -1026,7 +1035,10 @@ a { color:var(--accent); }
 .fleetwrap { display:grid; grid-template-columns:1fr 220px; gap:12px; margin-top:10px; }
 @media (max-width:700px) { .fleetwrap { grid-template-columns:1fr; } }
 #fleetCanvas { width:100%; background:#14161a; border:1px solid var(--border); border-radius:8px; display:block; }
-.fleetrow { display:flex; gap:8px; align-items:center; margin-bottom:6px; font-size:.85rem; }
+.fleetrow { display:flex; gap:8px; align-items:center; margin-bottom:6px; font-size:.85rem; cursor:pointer; border-radius:8px; padding:2px; }
+.fleetrow.sel { outline:2px solid #fff; }
+.fleetgoal { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:8px; min-height:34px; font-size:.9rem; }
+.fleetgoal button.go { background:var(--green); border-color:var(--green); color:#06240f; font-weight:700; }
 .fleetrow .dot { flex:none; width:24px; height:24px; border-radius:50%; color:#0b0d10; font-weight:700;
                  display:inline-flex; align-items:center; justify-content:center; font-size:.8rem; }
 .bar { display:flex; flex-wrap:wrap; gap:6px; align-items:center; background:var(--card); border:1px solid var(--border);
@@ -1123,7 +1135,7 @@ details.bar summary { cursor:pointer; }
   toestand, diensten, OpenCR/USB, ROS-fouten. Tik op een robot voor zijn historiek met grafieken.</div>
   <div class="evlist" id="evAll"></div></details>
 <details class="bar" id="fleetBox" style="display:none;margin-top:14px" open><summary id="fleetSum"></summary>
-  <div class="fleetwrap"><canvas id="fleetCanvas"></canvas>
+  <div class="fleetwrap"><div><canvas id="fleetCanvas"></canvas><div class="fleetgoal" id="fleetGoal"></div></div>
     <div><select id="fleetMap" style="display:none;margin-bottom:6px" title="Robots rijden op verschillende kaarten: welke tonen?"></select>
       <div id="fleetSide"></div>
       <p class="sub">Robots met <b>Navigatie</b> op een kaart uit de bibliotheek. Elke robot krijgt de posities van de andere
@@ -1209,7 +1221,8 @@ function batt(v) {   // 0 % = 11.0 V: there the OpenCR switches the motors off
 }
 var CMD_TEXT = { wifitest: "wifitest", stop_all: "stop alles", beep: "piep", update: "bijwerken", reboot: "herstarten", shutdown: "uitschakelen",
                  map_upload: "kaart naar bibliotheek", map_download: "kaart uit bibliotheek", set_pin: "PIN instellen",
-                 rollback: "terug naar vorige versie", install_version: "versie installeren" };
+                 rollback: "terug naar vorige versie", install_version: "versie installeren",
+                 nav_goal: "rij naar doel", nav_cancel: "doel annuleren" };
 function cmdText(c) {
   if (CMD_TEXT[c]) return CMD_TEXT[c];
   var p = c.split(":"); return (p[0] === "start" ? "start " : "stop ") + p[1];
@@ -2303,7 +2316,7 @@ function drawFleet() {
   document.getElementById("fleetSide").innerHTML = rs.map(function (r) {
     var st = r.age >= j.stale_s ? '<span class="sub">' + Math.round(r.age) + " s niets</span>"
       : !r.loc_ok ? '<span class="y">lokalisatie?</span>' : r.goal ? (Math.abs(r.v) > 0.01 ? "rijdt naar doel" : "draait / wacht") : "staat stil";
-    return '<div class="fleetrow"><span class="dot" style="background:' + (r.age >= j.stale_s ? "#555" : fleetColor(r)) + '">' +
+    return '<div class="fleetrow' + (fleet.sel === r.robot ? " sel" : "") + '" data-fleetsel="' + esc(r.robot) + '"><span class="dot" style="background:' + (r.age >= j.stale_s ? "#555" : fleetColor(r)) + '">' +
       esc(String(r.nr || "?")) + "</span><span>" + esc(r.robot) + '<br><span class="sub">' + st +
       " · " + Math.abs(r.v).toFixed(2) + " m/s</span></span></div>";
   }).join("") + (j.robots.length > rs.length ? '<div class="sub" style="margin-top:6px">' + (j.robots.length - rs.length) +
@@ -2334,6 +2347,12 @@ function drawFleet() {
     tx = function (x) { return (x - mx) * s; }; ty = function (y) { return 40 + (My - y) * s; };
   }
   var R = Math.max(0.14 * s, 12);    // TurtleBot3 Burger ~0.14 m straal
+  // inverse (screen -> map) for picking a robot and a goal with the pointer
+  if (m) {
+    var offx = 10 + ((W - 20) - bw * s) / 2, offy = 10 + ((H - 20) - bh * s) / 2;
+    fleet.view = { R: R, rs: rs, tx: tx, ty: ty,
+                   ix: function (px) { return wx0 + (px - offx) / s; }, iy: function (py) { return wy1 - (py - offy) / s; } };
+  } else fleet.view = { R: R, rs: rs, tx: tx, ty: ty, ix: function (px) { return mx + px / s; }, iy: function (py) { return My - (py - 40) / s; } };
   rs.forEach(function (r) {
     var col = r.age >= j.stale_s ? "#555" : fleetColor(r), t = fleet.trail[r.robot] || [];
     ctx.lineWidth = 2; ctx.globalAlpha = 0.45; ctx.strokeStyle = col; ctx.beginPath();
@@ -2368,11 +2387,97 @@ function drawFleet() {
     if (!r.loc_ok && r.age < j.stale_s) { ctx.fillStyle = "#e3b341"; ctx.fillText("?", x + R * 1.3, y - R * 1.1); }
   });
   ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+  var selR = rs.filter(function (r) { return r.robot === fleet.sel; })[0];
+  if (selR) {   // selected robot: white ring
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(tx(selR.x), ty(selR.y), R * 1.55, 0, 2 * Math.PI); ctx.stroke();
+  } else if (fleet.sel) { fleet.sel = null; fleet.pending = null; }
+  var pg = fleet.pending;
+  if (pg && selR) {   // goal being set: arrow in the robot's colour
+    var gx = tx(pg.x), gy = ty(pg.y), L = Math.max(R * 2.2, 28);
+    ctx.strokeStyle = "#fff"; ctx.fillStyle = fleetColor(selR); ctx.lineWidth = 2;
+    ctx.setLineDash([3, 4]); ctx.beginPath(); ctx.moveTo(tx(selR.x), ty(selR.y)); ctx.lineTo(gx, gy); ctx.stroke(); ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(gx, gy, R * 0.6, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+    ctx.save(); ctx.translate(gx, gy); ctx.rotate(-pg.yaw); ctx.lineWidth = 3; ctx.beginPath();
+    ctx.moveTo(0, 0); ctx.lineTo(L, 0); ctx.moveTo(L, 0); ctx.lineTo(L - 9, -6); ctx.moveTo(L, 0); ctx.lineTo(L - 9, 6); ctx.stroke(); ctx.restore();
+  }
+  renderFleetGoal(selR);
   if (m) {   // schaalbalk 1 m
     ctx.strokeStyle = "#8b939e"; ctx.fillStyle = "#8b939e"; ctx.lineWidth = 2; ctx.font = "12px system-ui";
     ctx.beginPath(); ctx.moveTo(14, H - 14); ctx.lineTo(14 + s, H - 14); ctx.stroke(); ctx.fillText("1 m", 18 + s, H - 10);
   }
 }
+
+// ---- Vlootkaart: robot kiezen en een doel geven (1.4.0) ----
+// Tik op een robot (of zijn naam rechts) om hem te kiezen, tik dan op de kaart
+// voor het doel; slepen vanaf het doel zet de eindrichting. "Rij erheen" stuurt
+// nav_goal via het opdrachtkanaal; de robot geeft het door aan Nav2
+// (/web/nav_cmd, zoals een doel in Fenix). Enkel na Docent aanmelden.
+fleet.sel = null; fleet.pending = null; fleet.drag = null;
+function fleetPointer(e) {
+  var cv = document.getElementById("fleetCanvas"), r = cv.getBoundingClientRect();
+  return [e.clientX - r.left, e.clientY - r.top];
+}
+function fleetHit(px, py) {
+  var v = fleet.view; if (!v) return null;
+  var best = null, bd = 1e9;
+  v.rs.forEach(function (r) { var d = Math.hypot(v.tx(r.x) - px, v.ty(r.y) - py); if (d < bd) { bd = d; best = r; } });
+  return best && bd <= v.R * 1.6 ? best : null;
+}
+(function () {
+  var cv = document.getElementById("fleetCanvas");
+  cv.style.touchAction = "none";
+  cv.addEventListener("pointerdown", function (e) {
+    if (!control || !fleet.view) return;
+    var p = fleetPointer(e), hit = fleetHit(p[0], p[1]), v = fleet.view;
+    if (hit) { fleet.sel = hit.robot === fleet.sel ? null : hit.robot; fleet.pending = null; drawFleet(); return; }
+    var selR = v.rs.filter(function (r) { return r.robot === fleet.sel; })[0];
+    if (!selR) return;
+    var x = v.ix(p[0]), y = v.iy(p[1]);
+    fleet.pending = { x: x, y: y, yaw: Math.atan2(y - selR.y, x - selR.x) };
+    fleet.drag = { px: p[0], py: p[1] };
+    cv.setPointerCapture(e.pointerId); drawFleet();
+  });
+  cv.addEventListener("pointermove", function (e) {
+    if (!fleet.drag || !fleet.pending) return;
+    var p = fleetPointer(e), dx = p[0] - fleet.drag.px, dy = p[1] - fleet.drag.py;
+    if (Math.hypot(dx, dy) > 12) { fleet.pending.yaw = Math.atan2(-dy, dx); drawFleet(); }
+  });
+  cv.addEventListener("pointerup", function () { fleet.drag = null; });
+  cv.addEventListener("pointercancel", function () { fleet.drag = null; });
+})();
+document.getElementById("fleetSide").addEventListener("click", function (e) {
+  var row = e.target.closest("[data-fleetsel]"); if (!row || !control) return;
+  fleet.sel = row.dataset.fleetsel === fleet.sel ? null : row.dataset.fleetsel; fleet.pending = null; drawFleet();
+});
+function fleetDeg(a) { var d = Math.round(a * 180 / Math.PI); return (d + 360) % 360; }
+function renderFleetGoal(selR) {
+  var box = document.getElementById("fleetGoal"), html;
+  if (!control) html = '<span class="sub">Docent aanmelden om een robot naar een doel te sturen.</span>';
+  else if (!selR) html = '<span class="sub">Tik op een robot om hem te kiezen, dan op de kaart waar hij heen moet (slepen = eindrichting).</span>';
+  else {
+    var nm = esc(selR.robot), pg = fleet.pending;
+    html = "<b>" + nm + "</b> " + (selR.loc_ok ? "" : '<span class="y">lokalisatie onzeker</span> ') +
+      (pg ? "→ x " + pg.x.toFixed(2).replace(".", ",") + " m, y " + pg.y.toFixed(2).replace(".", ",") + " m, richting " + fleetDeg(pg.yaw) + "°" +
+        ' <button class="go" data-fgo="1">Rij erheen</button> <button data-fclear="1">Wis doel</button>'
+        : '<span class="sub">tik op de kaart voor het doel</span>') +
+      (selR.goal ? ' <button data-fcancel="1">Huidig doel annuleren</button>' : "") +
+      ' <button data-fdesel="1">Klaar</button>';
+  }
+  if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }
+}
+document.getElementById("fleetGoal").addEventListener("click", function (e) {
+  var b = e.target.closest("button"); if (!b || !fleet.sel) return;
+  if (b.dataset.fgo && fleet.pending) {
+    var g = fleet.pending;
+    fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ cmd: "nav_goal", robots: [fleet.sel], arg: JSON.stringify({ x: g.x, y: g.y, yaw: g.yaw }) }) })
+      .then(function (x) { if (!x.ok) return x.json().then(function (j) { alert(j.error || "geweigerd"); }); fleet.pending = null; drawFleet(); refresh(); });
+  } else if (b.dataset.fclear) { fleet.pending = null; drawFleet(); }
+  else if (b.dataset.fcancel) {
+    fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ cmd: "nav_cancel", robots: [fleet.sel] }) }).then(function () { refresh(); });
+  } else if (b.dataset.fdesel) { fleet.sel = null; fleet.pending = null; drawFleet(); }
+});
 document.getElementById("fleetMap").addEventListener("change", function (e) { fleet.pick = e.target.value; refreshFleet(); });
 window.addEventListener("resize", drawFleet);
 refreshFleet(); setInterval(refreshFleet, 500);

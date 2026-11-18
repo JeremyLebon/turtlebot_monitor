@@ -6,6 +6,15 @@ de monitor-RPi komt (`git pull`). De pagina toont het naast de titel
 ("v1.0.0 · e46ac83", met de commit van de clone), de log bij het starten,
 `/api/robots` in het veld `version`.
 
+## 1.4.0 - 2026-11-18
+- **Robot naar een doel sturen vanuit de vlootkaart** (na Docent aanmelden):
+  tik op een robot (of zijn naam rechts), dan op de kaart waar hij heen moet;
+  slepen vanaf het doel zet de eindrichting. "Rij erheen" stuurt de opdracht
+  `nav_goal` (x, y, richting in het map-frame), "Huidig doel annuleren"
+  `nav_cancel`. Vraagt robot-image 1.10.1+ (turtlebot_docker `feature/vloot`)
+  met Navigatie actief; oudere robots melden "onbekende opdracht" niet en doen
+  niets.
+
 ## 1.3.1 - 2026-11-18
 - **Fout: de vlootkaart bleef leeg als de kaart nog niet in de bibliotheek
   stond.** De pagina probeerde de kaart maar één keer op te halen. Nu om de
