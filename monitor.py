@@ -363,7 +363,7 @@ def save_pin(h):
     os.replace(PIN_FILE + ".tmp", PIN_FILE)
 
 
-sessions = {}        # cookie token -> expiry ("Docent aanmelden")
+sessions = {}        # cookie token -> expiry ("Docent aanmelden"), also in SESSIONS_FILE
 login_fails = {}     # ip -> [wrong PINs in a row, locked until]
 
 
@@ -383,6 +383,28 @@ def host_ips():
 # Monitor on its own RPi (install_rpi.sh): the container asks the host to shut
 # down or reboot through a file in this folder; a systemd path unit on the RPi
 # acts on it. POWER_MARK exists only there, so the buttons show only there.
+SESSIONS_FILE = os.path.join(HERE, "sessions.json")   # not in git; survives a container restart
+
+
+def load_sessions():
+    try:
+        with open(SESSIONS_FILE) as f:
+            now = time.time()
+            sessions.update({t: exp for t, exp in json.load(f).items() if exp > now})
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+def save_sessions():
+    try:
+        with open(SESSIONS_FILE + ".tmp", "w") as f:
+            json.dump(sessions, f)
+        os.chmod(SESSIONS_FILE + ".tmp", 0o600)
+        os.replace(SESSIONS_FILE + ".tmp", SESSIONS_FILE)
+    except OSError:
+        pass
+
+
 POWER_MARK = os.path.join(HERE, ".rpi_power")
 POWER_REQUEST = os.path.join(HERE, "power_request")
 # Same idea for "Monitor bijwerken": the container writes update_request, a path
@@ -586,6 +608,7 @@ class Handler(BaseHTTPRequestHandler):
             del sessions[t]
         token = secrets.token_urlsafe(24)
         sessions[token] = now + SESSION_S
+        save_sessions()
         return self._send(200, json.dumps({"ok": True}), "application/json", cookie=token)
 
     def _read_json(self):
@@ -599,6 +622,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._login()
         if self.path == "/api/logout":
             sessions.pop(self._session(), None)
+            save_sessions()
             return self._send(200, json.dumps({"ok": True}), "application/json", cookie="")
         if self.path == "/result":     # robot: result of a command
             try:
@@ -891,6 +915,7 @@ button, select { background:#262a31; color:var(--text); border:1px solid var(--b
 button:hover { border-color:var(--accent); }
 button.stop { background:var(--red); border-color:var(--red); color:#2a0d0d; font-weight:700; }
 button.hot { background:var(--yellow); border-color:var(--yellow); color:#2a2000; font-weight:600; }
+.idlewarn { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); z-index:50; background:var(--yellow); color:#2a2000; font-weight:600; padding:14px 22px; border-radius:12px; font-size:1.05rem; cursor:pointer; box-shadow:0 4px 18px rgba(0,0,0,.5); }
 button:disabled, select:disabled { opacity:.4; cursor:default; }
 .btns { display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; }
 .res { margin-top:6px; font-size:.78rem; color:var(--muted); }
@@ -1070,16 +1095,41 @@ function post(url, body) {
 }
 // Kiosk screen on the RPi: whoever stands in front of it after the teacher must
 // not keep the buttons - log out after KIOSK_IDLE_S without mouse/touch/keys.
-var KIOSK_IDLE_S = 600, lastActivity = Date.now(), bootVersion = "";
-["pointerdown", "keydown", "wheel"].forEach(function (ev) {
-  document.addEventListener(ev, function () { lastActivity = Date.now(); }, true);
+// Bug until 1.1.5 (logged out ~5 s after logging in): a second, unseen kiosk tab
+// or window shares the login cookie but nobody touches it, so its idle timer
+// logged everyone out. Now: last activity is shared between tabs (localStorage),
+// only a visible page logs out, touch events count too, and a login is activity.
+var KIOSK_IDLE_S = 1800, KIOSK_WARN_S = 60, lastActivity = Date.now(), bootVersion = "";
+function markActivity() {
+  lastActivity = Date.now();
+  try { localStorage.setItem("tbmonActivity", String(lastActivity)); } catch (e) {}
+  var w = document.getElementById("idleWarn"); if (w) w.remove();
+}
+function lastSeenActivity() {
+  var t = 0; try { t = Number(localStorage.getItem("tbmonActivity")) || 0; } catch (e) {}
+  return Math.max(lastActivity, t);
+}
+["pointerdown", "touchstart", "mousedown", "keydown", "wheel"].forEach(function (ev) {
+  document.addEventListener(ev, markActivity, { capture: true, passive: true });
 });
+document.addEventListener("visibilitychange", function () { if (!document.hidden) markActivity(); });
 setInterval(function () {
-  if (KIOSK && lastJ && lastJ.session && Date.now() - lastActivity > KIOSK_IDLE_S * 1000) post("/api/logout");
-}, 10000);
+  if (!KIOSK || !lastJ || !lastJ.session || document.hidden) return;
+  var left = KIOSK_IDLE_S - (Date.now() - lastSeenActivity()) / 1000;
+  if (left <= 0) { document.getElementById("idleWarn") && document.getElementById("idleWarn").remove(); post("/api/logout"); return; }
+  var w = document.getElementById("idleWarn");
+  if (left <= KIOSK_WARN_S) {
+    if (!w) {
+      w = document.createElement("div"); w.id = "idleWarn"; w.className = "idlewarn";
+      w.addEventListener("click", markActivity);
+      document.body.appendChild(w);
+    }
+    w.textContent = "Docent wordt afgemeld over " + Math.ceil(left) + " s - tik hier om aangemeld te blijven";
+  } else if (w) w.remove();
+}, 1000);
 document.getElementById("loginBtn").addEventListener("click", function () {
-  if (this.dataset.session) { post("/api/logout"); return; }
-  pinPad("Docenten-PIN", function (pin) { post("/api/login", { pin: pin }); });
+  if (this.dataset.session) { if (confirm("Docent afmelden?")) post("/api/logout"); return; }
+  pinPad("Docenten-PIN", function (pin) { markActivity(); post("/api/login", { pin: pin }).then(markActivity); });
 });
 // On-screen keypad instead of prompt(): the kiosk touchscreen has no keyboard.
 // A real keyboard still works (digits, Backspace, Enter, Escape).
@@ -1841,6 +1891,7 @@ def main():
     global REMOTE_CONTROL, VIEW_ONLY
     REMOTE_CONTROL = args.remote_control
     VIEW_ONLY = args.view_only
+    load_sessions()
     threading.Thread(target=update_queue_loop, daemon=True).start()
     threading.Thread(target=config_loop, daemon=True).start()
     srv = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)

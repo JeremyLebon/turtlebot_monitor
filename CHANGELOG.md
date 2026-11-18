@@ -6,6 +6,18 @@ de monitor-RPi komt (`git pull`). De pagina toont het naast de titel
 ("v1.0.0 · e46ac83", met de commit van de clone), de log bij het starten,
 `/api/robots` in het veld `version`.
 
+## 1.1.6 - 2026-11-18
+- **Fout: op de kiosk werd je ~5 s na Docent aanmelden weer afgemeld.** Een tweede,
+  onzichtbaar kioskvenster of -tabblad deelt de aanmeldcookie, maar niemand raakt
+  het aan: zijn afmeldtimer meldde iedereen af. Nu onthouden alle vensters samen de
+  laatste aanraking, meldt enkel een zichtbare pagina af, tellen touch-events mee
+  en telt aanmelden zelf als aanraking.
+- Afmelden na **30 min** zonder aanraking (was 10), met een gele melding de laatste
+  minuut ("tik hier om aangemeld te blijven").
+- Op Docent afmelden tikken vraagt eerst of je zeker bent.
+- Aanmeldingen blijven bewaard na een herstart van de monitor (`sessions.json`,
+  niet in git), dus ook na Monitor bijwerken.
+
 ## 1.1.5 - 2026-11-18
 - **Monitor bijwerken met een knop** (naast Monitor-RPi Herstarten/Afsluiten, na
   Docent aanmelden): de container schrijft `update_request`, een systemd path unit
