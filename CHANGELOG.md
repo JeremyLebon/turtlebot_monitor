@@ -6,6 +6,14 @@ de monitor-RPi komt (`git pull`). De pagina toont het naast de titel
 ("v1.0.0 · e46ac83", met de commit van de clone), de log bij het starten,
 `/api/robots` in het veld `version`.
 
+## 1.5.1 - 2026-11-18
+- **Vlootkaart: het antwoord van de robot staat nu onder de kaart** (bv.
+  "Navigatie starten: mislukt ..."). Tot nu stond het enkel in de geopende
+  tegel van de robot, zodat het leek alsof er niets gebeurde.
+- **Robot met een te oud image** (ouder dan v1.10.2): rechts en onder de kaart
+  "robot-image te oud: v1.10.2+ nodig (nu v...)" in plaats van de knoppen
+  Navigatie starten / Beginpositie, die zo'n robot niet kent.
+
 ## 1.5.0 - 2026-11-18
 - **Navigatie starten en de beginpositie zetten vanuit de vlootkaart** (na
   Docent aanmelden). Rechts staan nu ook de robots die luisteren maar niet op

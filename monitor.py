@@ -2488,11 +2488,19 @@ function fleetOthers(rs) {
   rs.forEach(function (r) { on[r.robot] = 1; });
   return lastRobots.filter(function (r) { return r.listening && !on[r.robot]; });
 }
+function imageNum(r) {   // "v1.10.2 · ..." -> 1010002, null when unknown
+  var m = /^v(\d+)\.(\d+)\.(\d+)/.exec((((r || {}).data || {}).status || {}).image_version || "");
+  return m ? Number(m[1]) * 1e6 + Number(m[2]) * 1e3 + Number(m[3]) : null;
+}
+function fleetRobot(name) { return lastRobots.filter(function (r) { return r.robot === name; })[0]; }
+function fleetOld(r) { var v = imageNum(r); return v !== null && v < 1010002; }   // nav_start/nav_pose: 1.10.2+
 function fleetNavState(r) {   // r = robot from /api/robots
   var d = r.data || {}, l = d.launch || {}, n = d.nav;
+  if (fleetOld(r)) return { kind: "old", text: "robot-image te oud: v1.10.2+ nodig (nu " +
+    String((d.status || {}).image_version || "").split(" ")[0] + ")" };
   if (!l.navigation) return { kind: "off", text: "geen Navigatie" };
   if (!n) return { kind: "starting", text: "Navigatie start..." };
-  if (!("loc_ok" in n)) return { kind: "old", text: "Navigatie (robot-image te oud voor de vlootkaart: v1.10.2+)" };
+  if (!("loc_ok" in n)) return { kind: "old", text: "robot-image te oud: v1.10.2+ nodig" };
   if (n.map && n.map !== fleet.map) return { kind: "other", text: "Navigatie op " + n.map };
   if (!n.loc_ok) return { kind: "noloc", text: "wacht op beginpositie", nav: n };
   return { kind: "ok", text: "gelokaliseerd, nog geen vlootpositie", nav: n };
@@ -2500,7 +2508,7 @@ function fleetNavState(r) {   // r = robot from /api/robots
 function fleetTapMode() {   // what a tap on the map sets for the selected robot: "goal", "pose" or null
   var v = fleet.view;
   if (!fleet.sel || !v) return null;
-  if (fleet.selR) return fleet.mode === "pose" && v.hasMap ? "pose" : "goal";
+  if (fleet.selR) return fleet.mode === "pose" && v.hasMap && !fleetOld(fleetRobot(fleet.sel)) ? "pose" : "goal";
   var k = fleet.selSt && fleet.selSt.kind;
   return fleet.selO && v.hasMap && (k === "noloc" || k === "ok") ? "pose" : null;
 }
@@ -2529,9 +2537,15 @@ function renderFleetGoal() {
         (pg ? "→ " + fleetXY(pg) + ' <button class="go" data-fgo="1">Rij erheen</button> <button data-fclear="1">Wis doel</button>'
             : '<span class="sub">tik op de kaart voor het doel</span>') +
         (selR.goal ? ' <button data-fcancel="1">Huidig doel annuleren</button>' : "") +
-        (hasMap ? ' <button data-fmode="pose">Beginpositie</button>' : "");
+        (hasMap && !fleetOld(fleetRobot(fleet.sel)) ? ' <button data-fmode="pose">Beginpositie</button>' : "");
     }
     html += ' <button data-fdesel="1">Klaar</button>';
+    // the robot's answer to the last fleet command (otherwise only in its opened tile)
+    var res = (fleetRobot(fleet.sel) || {}).result, now = (lastJ || {}).now || Date.now() / 1000;
+    if (res && /^nav_/.test(res.cmd || "") && now - res.t < 300)
+      html += '<div style="flex-basis:100%" class="sub">' + esc(cmdText(res.cmd)) + ": " +
+        (res.ok === null ? "verstuurd..." : (res.ok ? '<span class="g">OK</span> ' : '<span class="r">mislukt</span> ') +
+          esc(res.message || (res.ok ? "" : "geen uitleg van de robot (ouder robot-image?)"))) + "</div>";
   }
   if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }
 }
