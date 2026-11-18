@@ -6,6 +6,13 @@ de monitor-RPi komt (`git pull`). De pagina toont het naast de titel
 ("v1.0.0 · e46ac83", met de commit van de clone), de log bij het starten,
 `/api/robots` in het veld `version`.
 
+## 1.3.1 - 2026-11-18
+- **Fout: de vlootkaart bleef leeg als de kaart nog niet in de bibliotheek
+  stond.** De pagina probeerde de kaart maar één keer op te halen. Nu om de
+  10 s opnieuw, dus ze verschijnt zodra je ze met "kaart naar bibliotheek"
+  doorstuurt. Een kaart die opnieuw onder dezelfde naam in de bibliotheek komt,
+  wordt ook opnieuw geladen.
+
 ## 1.3.0 - 2026-11-18
 - **Vlootkaart** (concept): robots met Navigatie
   op een kaart uit de bibliotheek sturen hun positie naar `POST /fleet` en

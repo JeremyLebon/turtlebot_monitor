@@ -2014,6 +2014,10 @@ function channelStat(rs, on) {
 }
 function refreshLib() {
   fetch("/api/maps").then(function (x) { return x.json(); }).then(function (maps) {
+    if (typeof fleet !== "undefined") maps.forEach(function (m) {   // map replaced in the library: reload it on the fleet map
+      if (fleet.libT[m.name] !== undefined && fleet.libT[m.name] !== m.created) delete fleet.cache[m.name];
+      fleet.libT[m.name] = m.created;
+    });
     if (document.activeElement && document.activeElement.tagName === "SELECT") return;
     var robotOpts = lastRobots.filter(function (r) { return r.listening; }).map(function (r) {
       return '<option value="' + esc(r.robot) + '">' + esc(r.robot) + "</option>"; }).join("");
@@ -2246,13 +2250,19 @@ function parseMapBundle(b) {
   return { name: b.name, canvas: cv, w: w, h: h, res: res, ox: origin[0], oy: origin[1],
            box: [x0, y0, x1 + 1, y1 + 1], zones: b.zones || [] };
 }
+// A map that is not (yet) in the library is tried again every 10 s, so it shows
+// up as soon as it was sent with "kaart naar bibliotheek" (1.3.0 gave up until a
+// reload). A map sent again under the same name is reloaded (library date).
+fleet.failT = {}; fleet.libT = {};
 function fleetLoadMap(name) {
-  if (fleet.cache[name] !== undefined) return;
+  var c = fleet.cache[name];
+  if (c === false && Date.now() - (fleet.failT[name] || 0) > 10000) c = undefined;
+  if (c !== undefined) return;
   fleet.cache[name] = null;   // bezig
   fetch("/maps/" + encodeURIComponent(name)).then(function (x) {
     if (!x.ok) throw new Error(); return x.json();
   }).then(function (b) { fleet.cache[name] = parseMapBundle(b); drawFleet(); })
-    .catch(function () { fleet.cache[name] = false; drawFleet(); });
+    .catch(function () { fleet.cache[name] = false; fleet.failT[name] = Date.now(); drawFleet(); });
 }
 function refreshFleet() {
   fetch("/api/fleet").then(function (x) { return x.json(); }).then(function (j) {
