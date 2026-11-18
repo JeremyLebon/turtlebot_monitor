@@ -11,3 +11,6 @@ wifi_scan.json.tmp
 turtlebot_config.csv
 turtlebot_config.csv.tmp
 __pycache__/
+update_request
+update_log.txt
+.self_update

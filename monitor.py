@@ -385,6 +385,51 @@ def host_ips():
 # acts on it. POWER_MARK exists only there, so the buttons show only there.
 POWER_MARK = os.path.join(HERE, ".rpi_power")
 POWER_REQUEST = os.path.join(HERE, "power_request")
+# Same idea for "Monitor bijwerken": the container writes update_request, a path
+# unit on the RPi runs update.sh (git pull + container restart) and writes its
+# output to update_log.txt. UPDATE_MARK exists only where install_rpi.sh set it up.
+UPDATE_MARK = os.path.join(HERE, ".self_update")
+UPDATE_REQUEST = os.path.join(HERE, "update_request")
+UPDATE_LOG = os.path.join(HERE, "update_log.txt")
+GITHUB_MAIN = "https://api.github.com/repos/JeremyLebon/turtlebot_monitor/commits/main"
+latest_cache = {"t": 0, "data": None, "busy": False}
+
+
+def local_commit():
+    m = re.search(r"· ([0-9a-f]{7})$", MONITOR_VERSION)
+    return m.group(1) if m else ""
+
+
+def _fetch_latest():
+    try:
+        req = urllib.request.Request(GITHUB_MAIN, headers={"Accept": "application/vnd.github+json",
+                                                           "User-Agent": "turtlebot-monitor"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            c = json.loads(r.read())
+        data = {"sha": c["sha"][:7], "date": c["commit"]["committer"]["date"][:16].replace("T", " "),
+                "message": c["commit"]["message"].split("\n")[0][:100]}
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        data = {"error": "GitHub niet bereikbaar: %s" % exc}
+    latest_cache.update(t=time.time(), data=data, busy=False)
+
+
+def self_update_state():
+    """For the page: can this monitor update itself, is it busy, is there a
+    newer commit on GitHub (checked in the background, every 10 min)."""
+    if not os.path.exists(UPDATE_MARK):
+        return {"available": False}
+    if not latest_cache["busy"] and time.time() - latest_cache["t"] > 600:
+        latest_cache["busy"] = True
+        threading.Thread(target=_fetch_latest, daemon=True).start()
+    log = ""
+    try:
+        with open(UPDATE_LOG, encoding="utf-8", errors="replace") as f:
+            log = "".join(f.readlines()[-8:]).strip()
+    except OSError:
+        pass
+    latest, here = latest_cache["data"] or {}, local_commit()
+    return {"available": True, "busy": os.path.exists(UPDATE_REQUEST), "local": here, "latest": latest,
+            "newer": bool(latest.get("sha") and here and latest["sha"] != here), "log": log}
 
 
 def wifi_plan():
@@ -604,6 +649,16 @@ class Handler(BaseHTTPRequestHandler):
             with open(POWER_REQUEST, "w") as f:
                 f.write(action + "\n")
             return self._send(200, json.dumps({"ok": True}), "application/json")
+        if self.path == "/api/self_update":   # "Monitor bijwerken": git pull + restart on the RPi
+            if not self._may_control():
+                return self._send(403, json.dumps({"error": "knoppen enkel na Docent aanmelden"}), "application/json")
+            if not os.path.exists(UPDATE_MARK):
+                return self._send(400, json.dumps({"error": "kan niet op dit toestel (voer install_rpi.sh opnieuw uit)"}),
+                                  "application/json")
+            latest_cache["t"] = 0          # check GitHub again after the update
+            with open(UPDATE_REQUEST, "w") as f:
+                f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n")
+            return self._send(200, json.dumps({"ok": True}), "application/json")
         if self.path in ("/api/update_all", "/api/update_all/cancel"):
             if not self._may_control():
                 return self._send(403, json.dumps({"error": "knoppen enkel vanaf de laptop zelf (localhost)"}),
@@ -791,7 +846,8 @@ class Handler(BaseHTTPRequestHandler):
                                                "wifitest": {"current": wifitest_result(wt["test"]) if wt["test"] else None,
                                                             "busy": bool(wt["test"] and not wt["test"].get("done")),
                                                             "history": wifitest_history()},
-                                               "rpi_power": os.path.exists(POWER_MARK)}),
+                                               "rpi_power": os.path.exists(POWER_MARK),
+                                               "self_update": self_update_state()}),
                               "application/json")
         if self.path.split("?")[0] in ("/", "/index.html"):   # also "/?kiosk" (kiosk.sh)
             return self._send(200, PAGE, "text/html; charset=utf-8")
@@ -834,6 +890,7 @@ button, select { background:#262a31; color:var(--text); border:1px solid var(--b
                  font:inherit; font-size:.82rem; cursor:pointer; }
 button:hover { border-color:var(--accent); }
 button.stop { background:var(--red); border-color:var(--red); color:#2a0d0d; font-weight:700; }
+button.hot { background:var(--yellow); border-color:var(--yellow); color:#2a2000; font-weight:600; }
 button:disabled, select:disabled { opacity:.4; cursor:default; }
 .btns { display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; }
 .res { margin-top:6px; font-size:.78rem; color:var(--muted); }
@@ -893,7 +950,8 @@ details.bar summary { cursor:pointer; }
   <button id="pinAll" data-icon="beheer" title="Docenten-PIN voor Beheer op de statuspagina, voor alle robots die luisteren, en voor Docent aanmelden op deze monitor (enkel de hash gaat naar de robots)">Docenten-PIN</button>
   <span class="sub" id="ctrlInfo"></span>
   <span id="rpiPower" style="display:none;margin-left:auto">Monitor-RPi:
-    <button data-power="reboot" data-icon="reboot">Herstarten</button> <button data-power="poweroff" data-icon="power">Afsluiten</button></span>
+    <button data-power="reboot" data-icon="reboot">Herstarten</button> <button data-power="poweroff" data-icon="power">Afsluiten</button>
+    <button id="selfUpd" data-icon="update" style="display:none">Monitor bijwerken</button></span>
 </div>
 <div class="bar" id="updBox" style="display:none"></div>
 <div class="grid" id="grid"></div>
@@ -1012,7 +1070,7 @@ function post(url, body) {
 }
 // Kiosk screen on the RPi: whoever stands in front of it after the teacher must
 // not keep the buttons - log out after KIOSK_IDLE_S without mouse/touch/keys.
-var KIOSK_IDLE_S = 600, lastActivity = Date.now();
+var KIOSK_IDLE_S = 600, lastActivity = Date.now(), bootVersion = "";
 ["pointerdown", "keydown", "wheel"].forEach(function (ev) {
   document.addEventListener(ev, function () { lastActivity = Date.now(); }, true);
 });
@@ -1095,6 +1153,14 @@ document.querySelectorAll("[data-power]").forEach(function (b) {
                      : "De monitor-RPi herstarten? (ongeveer 1 minuut weg)")) return;
     post("/api/rpi_power", { action: b.dataset.power });
   });
+});
+document.getElementById("selfUpd").addEventListener("click", function () {
+  var su = (lastJ && lastJ.self_update) || {};
+  var what = su.newer ? "Nieuwe versie op GitHub: " + su.latest.sha + " (" + su.latest.date + ")\n" + su.latest.message + "\n\n"
+                      : "Er is geen nieuwere versie gevonden; toch opnieuw ophalen en herstarten?\n\n";
+  if (!confirm(what + "De monitor haalt de nieuwste versie op (git pull) en herstart. De pagina is even weg en "
+               + "herlaadt dan vanzelf. De robots blijven rijden.")) return;
+  post("/api/self_update");
 });
 document.getElementById("openAll").addEventListener("click", function () {
   var anyClosed = lastRobots.some(function (r) { return !openTiles[r.robot]; });
@@ -1645,7 +1711,18 @@ function render() {
   document.getElementById("selPick").disabled = !control;
   document.getElementById("verAll").disabled = !control || busy || !nSel;
   if (control && !versions) { versions = { versions: [] , error: "laden..." }; loadVersions(); }
-  document.getElementById("rpiPower").style.display = control && j.rpi_power ? "" : "none";
+  var su = j.self_update || {}, sb = document.getElementById("selfUpd");
+  document.getElementById("rpiPower").style.display = control && (j.rpi_power || su.available) ? "" : "none";
+  sb.style.display = su.available ? "" : "none";
+  sb.disabled = !!su.busy;
+  sb.classList.toggle("hot", !!su.newer);
+  sb.innerHTML = fxIcon("update") + (su.busy ? "Bijwerken..." : su.newer ? "Monitor bijwerken (nieuw: " + su.latest.sha + ")" : "Monitor bijwerken");
+  sb.title = (su.latest && su.latest.sha ? "Nieuwste op GitHub: " + su.latest.sha + " · " + su.latest.date + " · " + su.latest.message
+              : su.latest && su.latest.error ? su.latest.error : "")
+             + (su.log ? "\n\nLaatste bijwerking:\n" + su.log : "");
+  // after an update (button, or update.sh over ssh) the server has a new version:
+  // reload so the kiosk screen also runs the new page
+  if (j.version) { if (!bootVersion) bootVersion = j.version; else if (j.version !== bootVersion) location.reload(); }
   document.querySelectorAll("[data-all]").forEach(function (b) { b.disabled = !control; });
   var listening = rs.filter(function (r) { return r.listening; }).length;
   document.getElementById("allBar").style.display = j.view_only ? "none" : "";

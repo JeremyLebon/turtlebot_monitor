@@ -6,6 +6,18 @@ de monitor-RPi komt (`git pull`). De pagina toont het naast de titel
 ("v1.0.0 · e46ac83", met de commit van de clone), de log bij het starten,
 `/api/robots` in het veld `version`.
 
+## 1.1.5 - 2026-11-18
+- **Monitor bijwerken met een knop** (naast Monitor-RPi Herstarten/Afsluiten, na
+  Docent aanmelden): de container schrijft `update_request`, een systemd path unit
+  op de RPi voert `update.sh` uit (git pull + container herstarten), uitvoer in
+  `update_log.txt` (laatste regels in de tooltip van de knop). De monitor kijkt elke
+  10 min op GitHub of er een nieuwere commit is; dan kleurt de knop geel.
+- Elke open pagina (ook de kiosk) herlaadt vanzelf zodra de monitor een andere
+  versie meldt, ook na `update.sh` via ssh.
+- Eenmalig nodig op de RPi: `bash install_rpi.sh` opnieuw uitvoeren (zelfde opties
+  als bij de installatie); dat zet de path unit en `.self_update` klaar. Zonder die
+  stap blijft de knop verborgen.
+
 ## 1.1.4 - 2026-11-13
 - **Wifikanaal per robot**, om de robots verdeeld uit te delen: gekleurd
   bolletje met het kanaal (36, 48, ...) naast de naam van elke robot, en

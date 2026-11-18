@@ -62,6 +62,34 @@ touch "$HERE/.rpi_power"
 sudo systemctl daemon-reload
 sudo systemctl enable --now turtlebot-monitor-power.path
 
+# 3a. Knop "Monitor bijwerken": de container schrijft update_request, een path
+#     unit voert update.sh uit als deze gebruiker (git pull + container herstarten)
+#     en schrijft de uitvoer naar update_log.txt (de pagina toont de laatste regels).
+echo "== Knop monitor bijwerken"
+sudo tee /etc/systemd/system/turtlebot-monitor-update.path >/dev/null <<EOF
+[Unit]
+Description=TurtleBot Monitor: bijwerken vanaf de monitorpagina
+[Path]
+PathExists=$HERE/update_request
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo tee /etc/systemd/system/turtlebot-monitor-update.service >/dev/null <<EOF
+[Unit]
+Description=TurtleBot Monitor: git pull en herstarten
+[Service]
+Type=oneshot
+User=$USER
+WorkingDirectory=$HERE
+TimeoutStartSec=300
+# %% = a literal % for systemd
+ExecStart=/bin/sh -c 'rm -f "$HERE/update_request"; { date "+%%Y-%%m-%%d %%H:%%M:%%S"; bash "$HERE/update.sh"; } > "$HERE/update_log.txt" 2>&1'
+EOF
+rm -f "$HERE/update_request"
+touch "$HERE/.self_update"
+sudo systemctl daemon-reload
+sudo systemctl enable --now turtlebot-monitor-update.path
+
 # 3b. Wifi-omgeving: de vrije wlan0 van de RPi (die hangt aan de kabel) scant
 #     elke minuut; de monitor toont alle netwerken in de buurt (Wifikanalen).
 if nmcli -t -f DEVICE,TYPE dev 2>/dev/null | grep -q ':wifi$'; then
