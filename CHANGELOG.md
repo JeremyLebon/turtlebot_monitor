@@ -6,6 +6,12 @@ de monitor-RPi komt (`git pull`). De pagina toont het naast de titel
 ("v1.0.0 · e46ac83", met de commit van de clone), de log bij het starten,
 `/api/robots` in het veld `version`.
 
+## 1.5.4 - 2026-11-18
+- `robot/` (bron van `fleet_node`) gelijk met robot-image 1.10.4: grotere
+  zone rond andere robots in de fleet-mask (beide stralen + 5 cm, verlengd in
+  de rijrichting, rand zoals de inflation layer), filter pas na de
+  lokalisatie, nette stop. De monitor zelf verandert niet.
+
 ## 1.5.3 - 2026-11-18
 - **Inzoomen op de vlootkaart**: muiswiel (rond de muis), twee vingers op het
   touchscreen, of de knoppen + / - / hele kaart rechtsboven. Verschuiven:

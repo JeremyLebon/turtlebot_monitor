@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""fleet_node - de robot in de vloot (CONCEPT, hoort in turtlebot_docker bin/,
-samen met fleet_core.py).
+"""fleet_node - de robot in de vloot (turtlebot_monitor docs/vloot.md).
 
-Draait naast Navigatie. Zolang Navigatie loopt met een kaart (dezelfde kaart uit
+launch_control_node start hem samen met Navigatie (log /tmp/launch_fleet.log)
+en stopt hem mee; enkel met een monitor (MONITOR_URL), niet als
+/root/turtlebot_state/fleet_off bestaat. Draait naast Navigatie. Zolang Navigatie loopt met een kaart (dezelfde kaart uit
 de kaartenbibliotheek op alle robots = hetzelfde map-frame):
 
   * stuurt hij 4x/s zijn positie (TF map -> base_footprint), snelheid, doel en
@@ -38,6 +39,7 @@ import rclpy
 from geometry_msgs.msg import Pose, PoseArray, PoseWithCovarianceStamped
 from nav2_msgs.msg import CostmapFilterInfo
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
@@ -84,7 +86,9 @@ class FleetNode(Node):
         self.base_frame = p("base_frame", "base_footprint").value
         self.map_param = p("map_name", "").value
         self.radius = p("robot_radius", 0.14).value           # Burger ~0.14 m
-        self.margin = p("keepout_margin", 0.25).value         # aflopende rand rond een andere robot
+        self.margin = p("keepout_margin", 0.4).value          # aflopende rand rond een andere robot
+        self.safety = p("keepout_safety", 0.05).value         # extra afstand tussen de twee robots
+        self.lead_s = p("keepout_lead_s", 0.6).value          # schijf vooruit in de rijrichting: v * lead_s
         self.near_r = p("nearby_radius", 2.0).value
         self.memory = FleetMemory(stale_s=p("stale_s", 3.0).value, forget_s=p("forget_s", 15.0).value,
                                   max_grow=p("max_grow", 1.0).value)
@@ -106,9 +110,14 @@ class FleetNode(Node):
         self.pub_markers = self.create_publisher(MarkerArray, "/fleet/robots", 1)
         self.pub_poses = self.create_publisher(PoseArray, "/fleet/poses", 1)
         self.pub_mask = self.create_publisher(OccupancyGrid, "/fleet/keepout_mask", LATCHED)
-        info = CostmapFilterInfo(type=0, filter_mask_topic="/fleet/keepout_mask", base=0.0, multiplier=1.0)
-        info.header.frame_id = self.map_frame          # type 0 = KEEPOUT
-        self.create_publisher(CostmapFilterInfo, "/fleet/filter_info", LATCHED).publish(info)
+        # filter info and mask only once the robot is localized (map -> base for
+        # LOCALIZED_S): earlier the KeepoutFilter of the local costmap (odom)
+        # asked map -> odom before AMCL published it and logged an ERROR
+        # (turtlebot05, 1.10.0). Lost localization later: keep the filter on.
+        self.pub_info = self.create_publisher(CostmapFilterInfo, "/fleet/filter_info", LATCHED)
+        self.localized_s = p("localized_s", 2.0).value
+        self.tf_since = None            # monotonic time since map -> base is found
+        self.filter_on = False
         self.create_service(Trigger, "/fleet/nearby", self._on_nearby)
         self.create_timer(1.0 / rate, self._tick)
         self.create_timer(0.5, self._publish_mask)     # 2 Hz: de KeepoutFilter logt elke nieuwe mask
@@ -140,8 +149,11 @@ class FleetNode(Node):
         try:
             t = self.tf.lookup_transform(self.map_frame, self.base_frame, Time())
             self.own = (t.transform.translation.x, t.transform.translation.y, yaw_of(t.transform.rotation))
+            if self.tf_since is None:
+                self.tf_since = time.monotonic()
         except Exception:               # nog geen lokalisatie (geen map -> base)
             self.own = None
+            self.tf_since = None
         mp = self._current_map()
         if self.url and mp and self.own and not self.busy and time.monotonic() >= self.backoff:
             plan = self.plan if self.plan and time.monotonic() - self.plan[0] < 3.0 else None
@@ -179,7 +191,15 @@ class FleetNode(Node):
     def _publish_mask(self):
         if not self.own:
             return
-        ox, oy, w, h, data = keepout_mask(self.own, self._others(), self.radius, self.margin)
+        info = None
+        if not self.filter_on:
+            if time.monotonic() - self.tf_since < self.localized_s:
+                return
+            info = CostmapFilterInfo(type=0, filter_mask_topic="/fleet/keepout_mask", base=0.0, multiplier=1.0)
+            info.header.frame_id = self.map_frame      # type 0 = KEEPOUT
+            self.filter_on = True
+        ox, oy, w, h, data = keepout_mask(self.own, self._others(), self.radius, self.margin,
+                                       self.safety, self.lead_s)
         g = OccupancyGrid()
         g.header = Header(frame_id=self.map_frame, stamp=self.get_clock().now().to_msg())
         g.info.resolution, g.info.width, g.info.height = 0.05, w, h
@@ -187,6 +207,9 @@ class FleetNode(Node):
         g.info.origin.orientation.w = 1.0
         g.data = data
         self.pub_mask.publish(g)
+        if info:                        # first mask: now switch the filter on
+            self.pub_info.publish(info)
+            self.get_logger().info("gelokaliseerd: andere robots in de costmap (fleet_filter)")
 
     def _publish_markers(self):
         stamp = self.get_clock().now().to_msg()
@@ -221,11 +244,14 @@ def main():
     node = FleetNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):   # SIGINT/SIGTERM (Navigatie stoppen)
         pass
     finally:
         node.destroy_node()
-        rclpy.try_shutdown()
+        try:
+            rclpy.try_shutdown()
+        except Exception:               # SIGINT/SIGTERM: the signal handler already shut down rclpy
+            pass
 
 
 if __name__ == "__main__":

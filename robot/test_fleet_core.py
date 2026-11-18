@@ -46,21 +46,39 @@ def test_mask_disc_and_gradient():
     other = [{"robot": "a", "x": 1.0, "y": 0.0, "grow": 0, "stale": False}]
     mask = keepout_mask((0, 0, 0), other)
     assert _at(mask, 1.0, 0.0) == 100              # lichaam
-    assert 10 <= _at(mask, 1.0, 0.27) <= 90        # rand
-    assert _at(mask, 1.0, 0.6) == 0                # vrij
+    assert _at(mask, 1.0, 0.30) == 100             # beide stralen + marge: midden eigen robot mag hier niet
+    assert 10 <= _at(mask, 1.0, 0.45) <= 90        # rand (zoals de inflation layer)
+    assert _at(mask, 1.0, 0.9) == 0                # vrij
     assert _at(mask, 0.0, 0.0) == 0                # eigen plek vrij
 
 
+def test_mask_touching_distance_is_lethal():
+    # twee Burgers raken elkaar bij ~0,21 m tussen de middelpunten: dat moet dodelijk zijn
+    other = [{"robot": "a", "x": 1.0, "y": 0.0, "grow": 0, "stale": False}]
+    mask = keepout_mask((0, 0, 0), other)
+    for a in range(0, 360, 30):
+        x, y = 1.0 + 0.24 * math.cos(math.radians(a)), 0.24 * math.sin(math.radians(a))
+        assert _at(mask, x, y) == 100, a
+
+
+def test_mask_leads_in_driving_direction():
+    other = [{"robot": "a", "x": 1.0, "y": 0.0, "yaw": 0.0, "v": 0.22, "grow": 0, "stale": False}]
+    mask = keepout_mask((0, 0, 0), other)
+    assert _at(mask, 1.0 + 0.33 + 0.10, 0.0) == 100    # vooruit verlengd (0,22 * 0,6 = 0,13 m)
+    assert _at(mask, 1.0 - 0.33 - 0.10, 0.0) < 100     # achteruit niet
+
+
 def test_mask_stale_is_soft_and_bigger():
-    other = [{"robot": "a", "x": 1.5, "y": 0.0, "grow": 0.5, "stale": True}]
+    other = [{"robot": "a", "x": 1.5, "y": 0.0, "grow": 0.5, "stale": True, "v": 0.2}]
     mask = keepout_mask((0, 0, 0), other)
     assert _at(mask, 1.5, 0.0) == 70
-    assert _at(mask, 1.5, 0.5) == 70               # onzekerheid groeit mee
+    assert _at(mask, 1.5, 0.7) == 70               # onzekerheid groeit mee
 
 
-def test_mask_too_close_not_lethal():
+def test_mask_too_close_stays_lethal():
+    # te dicht: blijft 100, Nav2 maakt er 252 van zodat de robot weg kan (override_lethal_cost)
     other = [{"robot": "a", "x": 0.2, "y": 0.0, "grow": 0, "stale": False}]
-    assert max(keepout_mask((0, 0, 0), other)[4]) <= 70
+    assert _at(keepout_mask((0, 0, 0), other), 0.2, 0.0) == 100
 
 
 if __name__ == "__main__":
