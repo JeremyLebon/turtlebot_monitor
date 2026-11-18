@@ -6,6 +6,26 @@ de monitor-RPi komt (`git pull`). De pagina toont het naast de titel
 ("v1.0.0 · e46ac83", met de commit van de clone), de log bij het starten,
 `/api/robots` in het veld `version`.
 
+## 1.5.0 - 2026-11-18
+- **Navigatie starten en de beginpositie zetten vanuit de vlootkaart** (na
+  Docent aanmelden). Rechts staan nu ook de robots die luisteren maar niet op
+  de vlootkaart staan, met hun toestand: geen Navigatie, Navigatie op een
+  andere kaart, of "wacht op beginpositie" (een robot verschijnt pas op de
+  vlootkaart als hij gelokaliseerd is). Kies er een:
+  - **Navigatie starten op <kaart>** (opdracht `nav_start`): de robot haalt de
+    kaart uit de bibliotheek als hij ze niet heeft en start Navigatie; draait
+    hij op een andere kaart, dan vraagt de pagina eerst of hij mag herstarten.
+  - **Beginpositie**: tik op de kaart waar de robot staat, sleep voor de
+    richting, "Zet beginpositie" (opdracht `nav_pose`, = 2D Pose Estimate).
+    "Laatste positie" gebruikt de laatste goede positie van de robot op die
+    kaart (geel stippelcirkeltje). Ook voor een robot die al op de kaart staat
+    (knop "Beginpositie" naast het doel), bv. als hij verkeerd gelokaliseerd is.
+- De kaartkeuze boven de vlootkaart toont ook de kaarten uit de bibliotheek;
+  zonder robots in de vloot staat de vlootkaart (voor de docent) op de eerste
+  kaart uit de bibliotheek.
+- Vraagt robot-image 1.10.2+ (turtlebot_docker `feature/vloot`); oudere robots
+  tonen "robot-image te oud".
+
 ## 1.4.0 - 2026-11-18
 - **Robot naar een doel sturen vanuit de vlootkaart** (na Docent aanmelden):
   tik op een robot (of zijn naam rechts), dan op de kaart waar hij heen moet;

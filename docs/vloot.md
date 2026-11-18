@@ -150,8 +150,18 @@ Test zonder ROS: `python3 robot/test_fleet_core.py`.
 ## Fase 3 - showcase
 
 - **Missies vanuit de monitor**: klik op de vlootkaart = doel voor de
-  geselecteerde robot (nieuw `/poll`-commando `nav_goal`, robot voert het uit
-  met de Simple Commander). Of een route uit de kaartbundel per robot.
+  geselecteerde robot (`/poll`-commando `nav_goal`, gebouwd in monitor 1.4.0 +
+  robot-image 1.10.1). Nog niet: een route uit de kaartbundel per robot.
+- **Navigatie starten en beginpositie vanuit de vlootkaart** (monitor 1.5.0 +
+  robot-image 1.10.2): rechts staan ook de robots die luisteren maar niet op
+  de vlootkaart staan (geen Navigatie, Navigatie op een andere kaart, of nog
+  niet gelokaliseerd: `fleet_node` stuurt pas een pose met `map -> base`).
+  `nav_start <kaart>` haalt de kaart uit de bibliotheek als de robot ze niet
+  heeft en start Navigatie; `nav_pose {"x","y","yaw"}` = 2D Pose Estimate.
+  De monitor kent de toestand uit `nav` in het statusbericht (`map`,
+  `loc_ok`, `suggest` = laatste goede positie, knop "Laatste positie").
+  Zonder robot in de vloot toont de vlootkaart (na Docent aanmelden) de eerste
+  kaart uit de bibliotheek, zodat je van nul kunt beginnen.
 - **Taakverdeling**: "inspecteer deze 6 punten" → de monitor verdeelt over de
   vrije robots (dichtstbijzijnde eerst).
 - **htmlsim**: meerdere robots in dezelfde browserwereld (één `fleet_node` per
