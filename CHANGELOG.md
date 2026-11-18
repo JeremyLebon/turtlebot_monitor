@@ -6,6 +6,14 @@ de monitor-RPi komt (`git pull`). De pagina toont het naast de titel
 ("v1.0.0 · e46ac83", met de commit van de clone), de log bij het starten,
 `/api/robots` in het veld `version`.
 
+## 1.5.3 - 2026-11-18
+- **Inzoomen op de vlootkaart**: muiswiel (rond de muis), twee vingers op het
+  touchscreen, of de knoppen + / - / hele kaart rechtsboven. Verschuiven:
+  slepen (als er geen robot gekozen is), twee vingers, of de rechter/middelste
+  muisknop. Met een robot gekozen zet slepen nog altijd de richting van het
+  doel of de beginpositie. De zoom blijft staan bij het verversen; een andere
+  kaart begint weer met de hele kaart. Ook zonder Docent aanmelden.
+
 ## 1.5.2 - 2026-11-18
 - Vlootkaart: knoppen enkel voor robots met image v1.10.3+. In v1.10.1 en
   v1.10.2 liet de robot de opdrachten van de vlootkaart niet door (bleef op

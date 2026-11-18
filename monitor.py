@@ -1036,6 +1036,9 @@ h1 { font-size:1.2rem; margin:0; }
 a { color:var(--accent); }
 .fleetwrap { display:grid; grid-template-columns:1fr 220px; gap:12px; margin-top:10px; }
 @media (max-width:700px) { .fleetwrap { grid-template-columns:1fr; } }
+.fleetcv { position:relative; }
+.fleetzoom { position:absolute; top:8px; right:8px; display:flex; flex-direction:column; gap:4px; }
+.fleetzoom button { width:34px; height:34px; padding:0; font-size:18px; line-height:1; opacity:.85; }
 #fleetCanvas { width:100%; background:#14161a; border:1px solid var(--border); border-radius:8px; display:block; }
 .fleetrow { display:flex; gap:8px; align-items:center; margin-bottom:6px; font-size:.85rem; cursor:pointer; border-radius:8px; padding:2px; }
 .fleetrow.sel { outline:2px solid #fff; }
@@ -1137,7 +1140,9 @@ details.bar summary { cursor:pointer; }
   toestand, diensten, OpenCR/USB, ROS-fouten. Tik op een robot voor zijn historiek met grafieken.</div>
   <div class="evlist" id="evAll"></div></details>
 <details class="bar" id="fleetBox" style="display:none;margin-top:14px" open><summary id="fleetSum"></summary>
-  <div class="fleetwrap"><div><canvas id="fleetCanvas"></canvas><div class="fleetgoal" id="fleetGoal"></div></div>
+  <div class="fleetwrap"><div><div class="fleetcv"><canvas id="fleetCanvas"></canvas><div class="fleetzoom" id="fleetZoom">
+    <button data-fz="in" title="Inzoomen (ook: muiswiel, twee vingers)">+</button><button data-fz="out" title="Uitzoomen">&minus;</button>
+    <button data-fz="fit" title="Hele kaart">&#x2922;</button></div></div><div class="fleetgoal" id="fleetGoal"></div></div>
     <div><select id="fleetMap" style="display:none;margin-bottom:6px" title="Robots rijden op verschillende kaarten: welke tonen?"></select>
       <div id="fleetSide"></div>
       <p class="sub">Robots met <b>Navigatie</b> op een kaart uit de bibliotheek. Elke robot krijgt de posities van de andere
@@ -2238,7 +2243,8 @@ document.addEventListener("click", function (e) {
 
 // ---- Vlootkaart: robots met Navigatie op een kaart uit de bibliotheek (POST /fleet) ----
 var FLEET_COLORS = ["#58a6ff", "#3fb950", "#e3b341", "#f778ba", "#a371f7", "#ff7b38", "#39c5cf", "#d2a8ff", "#7ee787", "#ffa198"];
-var fleet = { j: null, map: null, pick: "", cache: {}, trail: {}, view: null, lib: [], mode: "goal" };
+var fleet = { j: null, map: null, pick: "", cache: {}, trail: {}, view: null, lib: [], mode: "goal",
+              zm: { z: 1, ox: 0, oy: 0, map: null }, ptrs: {}, pinch: null, pan: null };
 function fleetColor(r) { var n = parseInt(r.nr, 10); return FLEET_COLORS[((isNaN(n) ? 0 : n) + 9) % FLEET_COLORS.length]; }
 function parseMapBundle(b) {
   // yaml: enkel resolution, origin, negate, free/occupied_thresh nodig
@@ -2342,29 +2348,34 @@ function drawFleet() {
     ctx.fillText(m === false ? "Kaart '" + fleet.map + "' staat niet in de kaartenbibliotheek - robots zonder achtergrond."
       : "kaart laden...", 12, 24);
   }
-  // wereld -> scherm: kaart passend in het canvas (enkel het gekende deel)
-  var bx = m ? m.box : null, s, tx, ty;
+  // wereld -> scherm: kaart passend in het canvas (enkel het gekende deel),
+  // daarna zoom + verschuiving (fleet.zm, 1.5.3): scherm = passend * z + (ox, oy)
+  var bx = m ? m.box : null, s, btx, bty, bix, biy;
   if (m) {
     var bw = (bx[2] - bx[0]) * m.res, bh = (bx[3] - bx[1]) * m.res;
     s = Math.min((W - 20) / bw, (H - 20) / bh);
     var wx0 = m.ox + bx[0] * m.res, wy1 = m.oy + (m.h - bx[1]) * m.res;
-    tx = function (x) { return 10 + (x - wx0) * s + ((W - 20) - bw * s) / 2; };
-    ty = function (y) { return 10 + (wy1 - y) * s + ((H - 20) - bh * s) / 2; };
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(m.canvas, bx[0], bx[1], bx[2] - bx[0], bx[3] - bx[1], tx(wx0), ty(wy1), bw * s, bh * s);
+    var offx = 10 + ((W - 20) - bw * s) / 2, offy = 10 + ((H - 20) - bh * s) / 2;
+    btx = function (x) { return offx + (x - wx0) * s; }; bty = function (y) { return offy + (wy1 - y) * s; };
+    bix = function (px) { return wx0 + (px - offx) / s; }; biy = function (py) { return wy1 - (py - offy) / s; };
   } else {   // geen kaart: passend rond de robots
     var xs = rs.length ? rs.map(function (r) { return r.x; }) : [-4, 4], ys = rs.length ? rs.map(function (r) { return r.y; }) : [-4, 4];
     var mx = Math.min.apply(null, xs) - 1, Mx = Math.max.apply(null, xs) + 1, my = Math.min.apply(null, ys) - 1, My = Math.max.apply(null, ys) + 1;
     s = Math.min(W / (Mx - mx), (H - 40) / (My - my));
-    tx = function (x) { return (x - mx) * s; }; ty = function (y) { return 40 + (My - y) * s; };
+    btx = function (x) { return (x - mx) * s; }; bty = function (y) { return 40 + (My - y) * s; };
+    bix = function (px) { return mx + px / s; }; biy = function (py) { return My - (py - 40) / s; };
   }
-  var R = Math.max(0.14 * s, 12);    // TurtleBot3 Burger ~0.14 m straal
-  // inverse (screen -> map) for picking a robot and a goal with the pointer
+  var Z = fleet.zm;
+  if (Z.map !== fleet.map) { Z.z = 1; Z.ox = Z.oy = 0; Z.map = fleet.map; }   // other map: whole map again
+  var tx = function (x) { return btx(x) * Z.z + Z.ox; }, ty = function (y) { return bty(y) * Z.z + Z.oy; }, S = s * Z.z;
   if (m) {
-    var offx = 10 + ((W - 20) - bw * s) / 2, offy = 10 + ((H - 20) - bh * s) / 2;
-    fleet.view = { R: R, rs: rs, tx: tx, ty: ty, hasMap: true,
-                   ix: function (px) { return wx0 + (px - offx) / s; }, iy: function (py) { return wy1 - (py - offy) / s; } };
-  } else fleet.view = { R: R, rs: rs, tx: tx, ty: ty, ix: function (px) { return mx + px / s; }, iy: function (py) { return My - (py - 40) / s; } };
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(m.canvas, bx[0], bx[1], bx[2] - bx[0], bx[3] - bx[1], tx(wx0), ty(wy1), bw * S, bh * S);
+  }
+  var R = Math.max(0.14 * S, 12);    // TurtleBot3 Burger ~0.14 m straal
+  // inverse (screen -> map) for picking a robot and a goal with the pointer
+  fleet.view = { R: R, rs: rs, tx: tx, ty: ty, hasMap: !!m, W: W, H: H,
+                 ix: function (px) { return bix((px - Z.ox) / Z.z); }, iy: function (py) { return biy((py - Z.oy) / Z.z); } };
   rs.forEach(function (r) {
     var col = r.age >= j.stale_s ? "#555" : fleetColor(r), t = fleet.trail[r.robot] || [];
     ctx.lineWidth = 2; ctx.globalAlpha = 0.45; ctx.strokeStyle = col; ctx.beginPath();
@@ -2428,7 +2439,7 @@ function drawFleet() {
   renderFleetGoal();
   if (m) {   // schaalbalk 1 m
     ctx.strokeStyle = "#8b939e"; ctx.fillStyle = "#8b939e"; ctx.lineWidth = 2; ctx.font = "12px system-ui";
-    ctx.beginPath(); ctx.moveTo(14, H - 14); ctx.lineTo(14 + s, H - 14); ctx.stroke(); ctx.fillText("1 m", 18 + s, H - 10);
+    ctx.beginPath(); ctx.moveTo(14, H - 14); ctx.lineTo(14 + S, H - 14); ctx.stroke(); ctx.fillText("1 m", 18 + S, H - 10);
   }
 }
 
@@ -2448,28 +2459,81 @@ function fleetHit(px, py) {
   v.rs.forEach(function (r) { var d = Math.hypot(v.tx(r.x) - px, v.ty(r.y) - py); if (d < bd) { bd = d; best = r; } });
   return best && bd <= v.R * 1.6 ? best : null;
 }
+// Zoom (1.5.3): muiswiel, twee vingers of de knoppen + / - / hele kaart.
+// Verschuiven: slepen waar slepen niets anders doet (geen robot gekozen),
+// twee vingers, of de rechter/middelste muisknop. Met een robot gekozen zet
+// slepen de richting van het doel of de beginpositie, zoals voor 1.5.3.
+function fleetZoomAt(px, py, f) {
+  var Z = fleet.zm, z = Math.max(1, Math.min(20, Z.z * f));
+  f = z / Z.z;
+  Z.ox = px - (px - Z.ox) * f; Z.oy = py - (py - Z.oy) * f; Z.z = z;
+  if (z === 1) Z.ox = Z.oy = 0;
+  drawFleet();
+}
+function fleetTwo() {
+  var p = Object.keys(fleet.ptrs).map(function (k) { return fleet.ptrs[k]; });
+  return { d: Math.max(1, Math.hypot(p[0][0] - p[1][0], p[0][1] - p[1][1])), mx: (p[0][0] + p[1][0]) / 2, my: (p[0][1] + p[1][1]) / 2 };
+}
 (function () {
   var cv = document.getElementById("fleetCanvas");
   cv.style.touchAction = "none";
+  cv.addEventListener("contextmenu", function (e) { e.preventDefault(); });
   cv.addEventListener("pointerdown", function (e) {
-    if (!control || !fleet.view) return;
-    var p = fleetPointer(e), hit = fleetHit(p[0], p[1]), v = fleet.view;
+    if (!fleet.view) return;
+    var p = fleetPointer(e), v = fleet.view;
+    fleet.ptrs[e.pointerId] = p;
+    try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+    if (Object.keys(fleet.ptrs).length === 2) {   // second finger: pinch/pan, undo what the first finger set
+      fleet.pending = fleet.prePending; fleet.drag = null; fleet.pan = null; fleet.pinch = fleetTwo(); drawFleet(); return;
+    }
+    if (Object.keys(fleet.ptrs).length > 2) return;
+    fleet.prePending = fleet.pending;
+    if (e.button === 1 || e.button === 2) { fleet.pan = { px: p[0], py: p[1] }; return; }
+    var hit = control ? fleetHit(p[0], p[1]) : null;
     if (hit) { fleet.sel = hit.robot === fleet.sel ? null : hit.robot; fleet.pending = null; fleet.mode = "goal"; drawFleet(); return; }
-    var selR = fleet.selR, mode = fleetTapMode();
-    if (!mode) return;
+    var selR = fleet.selR, mode = control ? fleetTapMode() : null;
+    if (!mode) { fleet.pan = { px: p[0], py: p[1] }; return; }
     var x = v.ix(p[0]), y = v.iy(p[1]);
     fleet.pending = { x: x, y: y, yaw: mode === "goal" ? Math.atan2(y - selR.y, x - selR.x)
                                        : fleet.pending ? fleet.pending.yaw : selR ? selR.yaw : 0 };
     fleet.drag = { px: p[0], py: p[1] };
-    cv.setPointerCapture(e.pointerId); drawFleet();
+    drawFleet();
   });
   cv.addEventListener("pointermove", function (e) {
+    if (!(e.pointerId in fleet.ptrs)) return;
+    var p = fleetPointer(e);
+    fleet.ptrs[e.pointerId] = p;
+    if (fleet.pinch && Object.keys(fleet.ptrs).length === 2) {
+      var t = fleetTwo(), Z = fleet.zm, f = t.d / fleet.pinch.d;
+      Z.ox += t.mx - fleet.pinch.mx; Z.oy += t.my - fleet.pinch.my;   // both fingers moved: pan
+      fleet.pinch = t; fleetZoomAt(t.mx, t.my, f); return;            // fingers apart/together: zoom
+    }
+    if (fleet.pan) {
+      fleet.zm.ox += p[0] - fleet.pan.px; fleet.zm.oy += p[1] - fleet.pan.py;
+      fleet.pan = { px: p[0], py: p[1] }; drawFleet(); return;
+    }
     if (!fleet.drag || !fleet.pending) return;
-    var p = fleetPointer(e), dx = p[0] - fleet.drag.px, dy = p[1] - fleet.drag.py;
+    var dx = p[0] - fleet.drag.px, dy = p[1] - fleet.drag.py;
     if (Math.hypot(dx, dy) > 12) { fleet.pending.yaw = Math.atan2(-dy, dx); drawFleet(); }
   });
-  cv.addEventListener("pointerup", function () { fleet.drag = null; });
-  cv.addEventListener("pointercancel", function () { fleet.drag = null; });
+  function up(e) {
+    delete fleet.ptrs[e.pointerId];
+    var n = Object.keys(fleet.ptrs).length;
+    if (n < 2) fleet.pinch = null;
+    if (!n) { fleet.drag = null; fleet.pan = null; }
+  }
+  cv.addEventListener("pointerup", up);
+  cv.addEventListener("pointercancel", up);
+  cv.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    var p = fleetPointer(e);
+    fleetZoomAt(p[0], p[1], Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0015)));
+  }, { passive: false });
+  document.getElementById("fleetZoom").addEventListener("click", function (e) {
+    var b = e.target.closest("button"), v = fleet.view; if (!b || !v) return;
+    if (b.dataset.fz === "fit") { fleet.zm.z = 1; fleet.zm.ox = fleet.zm.oy = 0; drawFleet(); }
+    else fleetZoomAt(v.W / 2, v.H / 2, b.dataset.fz === "in" ? 1.5 : 1 / 1.5);
+  });
 })();
 document.getElementById("fleetSide").addEventListener("click", function (e) {
   var row = e.target.closest("[data-fleetsel]"); if (!row || !control) return;
@@ -2482,7 +2546,7 @@ function fleetDeg(a) { var d = Math.round(a * 180 / Math.PI); return (d + 360) %
 // luisteren maar er (nog) niet op staan: "Navigatie starten op <kaart>"
 // (nav_start: de robot haalt de kaart uit de bibliotheek als hij ze niet heeft)
 // en daarna de beginpositie: tik waar hij staat, sleep voor de richting
-// (nav_pose = 2D Pose Estimate). Vraagt robot-image 1.10.2+.
+// (nav_pose = 2D Pose Estimate). Vraagt robot-image 1.10.3+.
 function fleetOthers(rs) {
   var on = {};
   rs.forEach(function (r) { on[r.robot] = 1; });
@@ -2517,7 +2581,7 @@ function renderFleetGoal() {
   var box = document.getElementById("fleetGoal"), html, selR = fleet.selR, st = fleet.selSt, pg = fleet.pending,
       mode = fleetTapMode(), hasMap = fleet.view && fleet.view.hasMap;
   if (!control) html = '<span class="sub">Docent aanmelden om robots te sturen.</span>';
-  else if (!fleet.sel) html = '<span class="sub">Tik op een robot (op de kaart of rechts) om hem te kiezen.</span>';
+  else if (!fleet.sel) html = '<span class="sub">Tik op een robot (op de kaart of rechts) om hem te kiezen. Zoomen: muiswiel, twee vingers of +/&minus;; slepen = verschuiven.</span>';
   else {
     html = "<b>" + esc(fleet.sel) + "</b> ";
     if (!selR && !mode) {
