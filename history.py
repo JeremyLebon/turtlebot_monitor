@@ -23,12 +23,14 @@ SAMPLE_EVERY_S = 10       # per robot hoogstens 1 sample per 10 s
 DETAIL_DAYS = 7           # daarna 1 sample per minuut
 KEEP_DAYS = 30
 OFFLINE_AFTER_S = 20      # zelfde grens als de tegels
+EXT5V_LOW = 4.85          # 5V-ingang van de Pi 5: waarschuwing
+EXT5V_BAD = 4.75          # ... fout (de Pi meldt onderspanning rond 4,63 V)
 
 SVC_NAME = {"zenoh": "Zenoh", "rosbridge": "rosbridge", "webpagina": "webpagina", "launch_control": "launch control",
             "twist_mux": "twist_mux", "cmd_vel_guard": "cmd_vel_guard", "nav_web": "nav-web", "system_info": "systeeminfo"}
 
 COLUMNS = ("battery_v", "cpu_temp", "cpu_use", "load1", "wifi_dbm", "wifi_ch", "rx_kbps", "tx_kbps",
-           "throttled", "state", "uptime")
+           "throttled", "state", "uptime", "ext5v")
 
 
 def _state(launch):
@@ -68,6 +70,8 @@ def extract(payload):
         "throttled": thr if isinstance(thr, int) else None,
         "state": _state(launch),
         "uptime": _num(s.get("uptime_seconds"), 0),
+        # 5 V input of the Pi 5 (PMIC EXT5V_V, image 1.x: snapshot every 5 s)
+        "ext5v": _num(s.get("ext5v_v")),
     }
 
 
@@ -80,6 +84,10 @@ class History:
         self.db.execute("PRAGMA synchronous=NORMAL")      # SD card: fewer fsyncs
         self.db.execute("CREATE TABLE IF NOT EXISTS samples (robot TEXT, t REAL, %s)"
                         % ", ".join(c + (" TEXT" if c == "state" else " REAL") for c in COLUMNS))
+        have = {r[1] for r in self.db.execute("PRAGMA table_info(samples)")}
+        for c in COLUMNS:                      # columns added in a later version
+            if c not in have:
+                self.db.execute("ALTER TABLE samples ADD COLUMN %s %s" % (c, "TEXT" if c == "state" else "REAL"))
         self.db.execute("CREATE INDEX IF NOT EXISTS samples_rt ON samples (robot, t)")
         self.db.execute("CREATE TABLE IF NOT EXISTS events (robot TEXT, t REAL, kind TEXT, level TEXT, text TEXT)")
         self.db.execute("CREATE INDEX IF NOT EXISTS events_t ON events (t)")
@@ -89,6 +97,7 @@ class History:
         self.flags = {}        # (robot, key) -> {"on": reported?, "since": time the condition flipped}
         self.last_sample = {}  # robot -> time of the last stored sample
         self.last_prune = 0
+        self.last_kind = {}    # (robot, kind) -> time of the last event of that kind (rate limit)
         self._dirty = False
 
     # ------------------------------------------------------------- writing
@@ -145,6 +154,13 @@ class History:
             self.event(robot, "undervoltage", "error", "Onderspanning van de Pi (nu)", now)
         if thr & 0x10000 and not pthr & 0x10000:
             self.event(robot, "undervoltage", "error", "Onderspanning gemeten sinds de opstart (get_throttled 0x%x)" % thr, now)
+        # 5 V input of the Pi: a dip is short, so no 30 s wait - but at most
+        # one event per minute (it can hang around 4.8 V while driving)
+        v5 = v["ext5v"]
+        if v5 is not None and v5 < EXT5V_LOW and now - self.last_kind.get((robot, "5v"), 0) > 60:
+            self.last_kind[(robot, "5v")] = now
+            self.event(robot, "5v", "error" if v5 < EXT5V_BAD else "warn",
+                       "5V-voeding van de Pi laag: %.2f V (toestand %s)" % (v5, v["state"]), now)
         if thr & 4 and not pthr & 4:
             self.event(robot, "throttle", "warn", "Pi vertraagt (throttled)", now)
         # battery
@@ -250,6 +266,8 @@ class History:
                     extra.append("batterij %.2f V" % v["battery_v"])
                 if v["wifi_dbm"] is not None:
                     extra.append("wifi %d dBm" % v["wifi_dbm"])
+                if v["ext5v"] is not None:
+                    extra.append("5V %.2f V" % v["ext5v"])
                 if v["throttled"]:
                     extra.append("throttled 0x%x" % v["throttled"])
                 self.event(robot, "offline", "error",

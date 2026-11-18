@@ -218,8 +218,8 @@ Werkt alles, dan mag `~/turtlebot_monitor_oud` weg.
 De monitor bewaart wat de robots sturen in `history.db` (SQLite, naast
 `monitor.py`, niet in git; code in `history.py`):
 
-- **Waarden** per robot elke 10 s: batterij, wifi (dBm, kanaal), CPU-gebruik,
-  temperatuur, wifiverkeer, `throttled`, toestand, uptime. 7 dagen in detail,
+- **Waarden** per robot elke 10 s: batterij, 5V-voeding van de Pi, wifi (dBm,
+  kanaal), CPU-gebruik, temperatuur, wifiverkeer, `throttled`, toestand, uptime. 7 dagen in detail,
   daarna 1 per minuut, na 30 dagen weg. Ruwweg 40 kB per robot per uur dat hij
   aan staat: met 9 robots hooguit ~100 MB.
 - **Gebeurtenissen**, afgeleid uit opeenvolgende berichten: offline (met de
