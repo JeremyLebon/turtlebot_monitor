@@ -1618,6 +1618,7 @@ function tile(r, now, common) {
     if (s.throttled & 1) msgs.push("Onderspanning van de Pi (voeding/batterij)");
     if (b[1] === "y") warns.push("batterij bijna leeg");
     if (s.wifi_signal_dbm != null && s.wifi_signal_dbm < -72) warns.push("zwakke wifi");
+    if (d.nav && d.nav.state === "aborted") warns.push("navigatie mislukt");
     health(s, msgs, warns, tips, rosErrs);
     var v = (s.image_version || "").split(" ")[0];
     if (common && v && v !== common) warns.push("andere versie dan de rest (" + common + ")");
@@ -1658,6 +1659,7 @@ function tile(r, now, common) {
       "<span>TB-AP-" + nr + "</span><span>" + apText(nr) + "</span>" +
       "<span>Gebruikers</span>" + usersText(s) +
       "<span>Kaart</span><span>" + esc(l.map_running || "--") + "</span>" +
+      (d.nav ? "<span>Navigatie</span><span>" + navText(d.nav) + "</span>" : "") +
       "<span>USB / lidar</span><span>" + (l.usb_power === "off" ? "uit (spaarstand)" : l.usb_power === "on" ? "aan" : "--") +
         (s.lidar ? ", " + s.lidar.hours.toFixed(0) + " draaiuren" : "") + "</span>" +
       "<span>Software</span><span>" + esc(s.image_version || "--") + softwareState(s.updates) +
@@ -1671,6 +1673,20 @@ function tile(r, now, common) {
     '<div style="margin-top:8px"><button data-hist="' + esc(r.robot) + '">Historiek (grafieken en gebeurtenissen)</button></div>' +
     '<div class="sub" style="margin-top:8px">' + (KIOSK ? "statuspagina" :
       '<a href="http://10.0.' + Number(r.nr) + '.10:8080/" target="_blank">statuspagina</a>') + " (wifi TB-AP-" + nr + ")</div></div>";
+}
+// Navigation state (robot image 1.10.0+, system_info_node nav_summary):
+// goal or route, point n/m, navigating/paused/failed, distance left
+var NAV_STATES = { idle: ["klaar", ""], sending: ["verzonden", ""], navigating: ["onderweg", "g"], action: ["actie bij punt", "g"],
+  paused: ["gepauzeerd", "y"], succeeded: ["aangekomen", "g"], aborted: ["mislukt", "r"], canceled: ["geannuleerd", "y"],
+  rejected: ["geweigerd", "r"], unavailable: ["Nav2 niet klaar", "y"] };
+function navText(n) {
+  var st = NAV_STATES[n.state] || [n.state || "--", ""];
+  var what = n.mode === "route" ? "route" + (n.points ? " punt " + n.point + "/" + n.points : "") +
+    (n.lap != null ? " (ronde " + n.lap + ")" : "") : n.mode === "goal" ? "doel" : "";
+  return (what ? esc(what) + " · " : "") + '<span class="' + st[1] + '">' + esc(st[0]) + "</span>" +
+    (n.left_m != null ? " · nog " + n.left_m.toFixed(1).replace(".", ",") + " m" : "") +
+    (n.recoveries ? " · " + n.recoveries + " herstelpoging(en)" : "") +
+    (n.msg ? '<br><span class="sub">' + esc(n.msg) + "</span>" : "");
 }
 // ROS errors as a list in the opened tile: the tooltip on the warning line
 // needs a mouse (not on the kiosk touch screen or a phone). Newest first,

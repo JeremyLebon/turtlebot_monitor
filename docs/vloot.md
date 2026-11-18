@@ -51,8 +51,10 @@ dat vraagt namespaces op alle robots en studentenlaptops zien dan alles.
 
 ## Fase 1 - robot: `fleet_node` (concept in `robot/fleet_node.py`)
 
-Hoort in `turtlebot_docker` (bin/, naast `system_info_node.py`), starten
-samen met Navigatie (`launch_control_node`).
+Zit in het robot-image 1.10.0 (`turtlebot_docker` branch `feature/vloot`,
+`docker/fleet_node.py`): start en stopt samen met Navigatie
+(`launch_control_node`), enkel met `MONITOR_URL`; uit per robot met
+`/root/turtlebot_state/fleet_off`.
 
 - Stuurt TF `map → base_footprint`, `/odom`-snelheid, `/plan` (doel + pad,
   max. 40 punten) en of AMCL zeker is (`/amcl_pose`-covariantie < 25 cm).
@@ -60,7 +62,7 @@ samen met Navigatie (`launch_control_node`).
   SLAM heeft elke robot een eigen map-frame, posities zijn dan niet te vergelijken).
 - Publiceert de andere robots: `/fleet/robots` (MarkerArray), `/fleet/poses`
   (PoseArray), `/fleet/keepout_mask` + `/fleet/filter_info` (costmap), service `/fleet/nearby`.
-- Niet getest op een robot (geen ROS hier). Getest: de monitorkant en `fleet_core` (geheugen, nearby, mask).
+- Nog niet getest op een robot. Getest: de monitorkant, `fleet_core`, en `fleet_node` met ROS in een container met `fake_fleet.py` (18-11).
 
 **Werkwijze in de klas / showcase**
 

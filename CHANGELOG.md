@@ -15,6 +15,9 @@ de monitor-RPi komt (`git pull`). De pagina toont het naast de titel
   (hoort in turtlebot_docker) met `fleet_core.py`: onthoudt de laatst gekende
   posities, service `/fleet/nearby`, andere robots als obstakel via de Nav2
   KeepoutFilter. Uitleg en volgende fasen: `docs/vloot.md`.
+- **Navigatietoestand op de tegel** (robot-image 1.10.0+, veld `nav`): doel
+  of route, punt n/m, onderweg/gepauzeerd/mislukt, resterende afstand;
+  waarschuwing "navigatie mislukt".
 
 ## 1.2.0 - 2026-11-18
 - **Historiek en gebeurtenissen** (`history.py`, `history.db`): de waarden van
