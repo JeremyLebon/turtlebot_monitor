@@ -1143,10 +1143,14 @@ details.bar summary { cursor:pointer; }
   <div class="fleetwrap"><div><div class="fleetcv"><canvas id="fleetCanvas"></canvas><div class="fleetzoom" id="fleetZoom">
     <button data-fz="in" title="Inzoomen (ook: muiswiel, twee vingers)">+</button><button data-fz="out" title="Uitzoomen">&minus;</button>
     <button data-fz="fit" title="Hele kaart">&#x2922;</button></div></div><div class="fleetgoal" id="fleetGoal"></div></div>
-    <div><select id="fleetMap" style="display:none;margin-bottom:6px" title="Robots rijden op verschillende kaarten: welke tonen?"></select>
+    <div><label class="sub" style="display:flex;gap:6px;align-items:center;margin-bottom:6px;cursor:pointer"
+      title="Zones van de kaart (verboden, muren, banen, snelheid) en de vlootzone rond elke robot (waar een andere robot niet mag komen)"><input type="checkbox" id="fleetZones" checked> Zones tonen</label>
+      <select id="fleetMap" style="display:none;margin-bottom:6px" title="Robots rijden op verschillende kaarten: welke tonen?"></select>
       <div id="fleetSide"></div>
       <p class="sub">Robots met <b>Navigatie</b> op een kaart uit de bibliotheek. Elke robot krijgt de posities van de andere
-      terug (<code>/fleet/robots</code> in RViz of Lichtblick). Stippellijn = gepland pad, kruis = doel, rood = te dicht bij elkaar.</p></div>
+      terug (<code>/fleet/robots</code> in RViz of Lichtblick). Stippellijn = gepland pad, kruis = doel, rood = te dicht bij elkaar.
+      Zones: rood = verboden zone / muur, groen = voorkeursbaan, blauw = snelheid; gekleurde vlek rond een robot = zijn
+      vlootzone (daar mag een andere robot niet komen, schuift mee vooruit als hij rijdt).</p></div>
   </div></details>
 <details class="bar" id="chanBox" style="display:none;margin-top:14px"><summary id="chanSum"></summary><div id="chanBody"></div></details>
 <details class="bar" id="wtBox" style="display:none;margin-top:14px"><summary id="wtSum"></summary>
@@ -2372,6 +2376,8 @@ function drawFleet() {
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(m.canvas, bx[0], bx[1], bx[2] - bx[0], bx[3] - bx[1], tx(wx0), ty(wy1), bw * S, bh * S);
   }
+  if (m && fleet.zones) fleetDrawMapZones(ctx, m.zones, tx, ty, S);
+  if (fleet.zones) fleetDrawRobotZones(ctx, rs, j, tx, ty, S);
   var R = Math.max(0.14 * S, 12);    // TurtleBot3 Burger ~0.14 m straal
   // inverse (screen -> map) for picking a robot and a goal with the pointer
   fleet.view = { R: R, rs: rs, tx: tx, ty: ty, hasMap: !!m, W: W, H: H,
@@ -2441,6 +2447,60 @@ function drawFleet() {
     ctx.strokeStyle = "#8b939e"; ctx.fillStyle = "#8b939e"; ctx.lineWidth = 2; ctx.font = "12px system-ui";
     ctx.beginPath(); ctx.moveTo(14, H - 14); ctx.lineTo(14 + S, H - 14); ctx.stroke(); ctx.fillText("1 m", 18 + S, H - 10);
   }
+}
+
+// ---- Zones op de vlootkaart (1.5.5) ----
+// Kaartzones uit de kaartbundel, in de kleuren van de Navigatie-pagina (nav.html
+// ZONE_STYLE; "area" is enkel voor explore_demo en blijft weg). Vlootzone =
+// wat fleet_node (robot-image 1.10.4, fleet_core.keepout_mask) in de costmap
+// van de ANDERE robots zet: dodelijk binnen beide stralen + 5 cm (0,33 m) rond
+// de robot, verlengd in zijn rijrichting over v x 0,6 s, met een rand van 0,4 m.
+var FLEET_ZONE_STYLE = { nogo: ["#e5484d", "rgba(229,72,77,0.28)"], wall: ["#e5484d", null],
+                         lane: ["#3fb950", "rgba(63,185,80,0.18)"], speed: ["#4ea1ff", "rgba(78,161,255,0.2)"] };
+var FLEET_KEEPOUT = { core: 2 * 0.14 + 0.05, margin: 0.4, lead_s: 0.6 };
+try { fleet.zones = localStorage.getItem("fleetZones") !== "0"; } catch (e) { fleet.zones = true; }
+document.getElementById("fleetZones").checked = fleet.zones;
+document.getElementById("fleetZones").addEventListener("change", function (e) {
+  fleet.zones = e.target.checked;
+  try { localStorage.setItem("fleetZones", fleet.zones ? "1" : "0"); } catch (err) {}
+  drawFleet();
+});
+function fleetDrawMapZones(ctx, zones, tx, ty, S) {
+  (zones || []).forEach(function (z) {
+    var st = FLEET_ZONE_STYLE[z.type], p = z.points || [];
+    if (!st || p.length < 2) return;
+    ctx.save(); ctx.beginPath();
+    p.forEach(function (q, i) { ctx[i ? "lineTo" : "moveTo"](tx(q[0]), ty(q[1])); });
+    if (z.type === "wall") {
+      ctx.strokeStyle = st[0]; ctx.lineWidth = Math.max(3, 0.1 * S); ctx.lineCap = "round"; ctx.stroke();
+    } else {
+      ctx.closePath(); ctx.fillStyle = st[1]; ctx.fill();
+      ctx.strokeStyle = st[0]; ctx.lineWidth = 1.5;
+      if (z.type !== "nogo") ctx.setLineDash([6, 4]);
+      ctx.stroke();
+      if (z.type === "speed" && z.percent) {
+        var cx = 0, cy = 0;
+        p.forEach(function (q) { cx += q[0]; cy += q[1]; });
+        ctx.setLineDash([]); ctx.fillStyle = st[0]; ctx.font = "bold 12px system-ui"; ctx.textAlign = "center";
+        ctx.fillText(z.percent + "%", tx(cx / p.length), ty(cy / p.length) + 4);
+      }
+    }
+    ctx.restore();
+  });
+}
+function fleetDrawRobotZones(ctx, rs, j, tx, ty, S) {
+  rs.forEach(function (r) {
+    if (r.age >= j.stale_s) return;
+    var lead = (r.v || 0) * FLEET_KEEPOUT.lead_s, yaw = r.yaw || 0;
+    var ax = tx(r.x), ay = ty(r.y), bx = tx(r.x + lead * Math.cos(yaw)), by = ty(r.y + lead * Math.sin(yaw));
+    if (Math.hypot(bx - ax, by - ay) < 0.5) bx = ax + 0.5;   // standing still: a round dot
+    ctx.save(); ctx.lineCap = "round"; ctx.strokeStyle = fleetColor(r);
+    ctx.globalAlpha = 0.08; ctx.lineWidth = 2 * (FLEET_KEEPOUT.core + FLEET_KEEPOUT.margin) * S;   // rand
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+    ctx.globalAlpha = 0.22; ctx.lineWidth = 2 * FLEET_KEEPOUT.core * S;                          // dodelijk
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+    ctx.restore();
+  });
 }
 
 // ---- Vlootkaart: robot kiezen en een doel geven (1.4.0) ----

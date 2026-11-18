@@ -6,6 +6,16 @@ de monitor-RPi komt (`git pull`). De pagina toont het naast de titel
 ("v1.0.0 · e46ac83", met de commit van de clone), de log bij het starten,
 `/api/robots` in het veld `version`.
 
+## 1.5.5 - 2026-11-18
+- **Zones op de vlootkaart** (vinkje "Zones tonen", onthouden per browser):
+  - de zones van de kaart uit de kaartbundel: verboden zones en muren (rood),
+    voorkeursbanen (groen), snelheidszones (blauw, met percentage), in de
+    kleuren van de Navigatie-pagina;
+  - de vlootzone rond elke robot in zijn kleur: waar een andere robot niet mag
+    komen (0,33 m, verlengd in de rijrichting over v x 0,6 s, met een lichtere
+    rand van 0,4 m), dezelfde formule als `fleet_core.keepout_mask` in
+    robot-image 1.10.4.
+
 ## 1.5.4 - 2026-11-18
 - `robot/` (bron van `fleet_node`) gelijk met robot-image 1.10.4: grotere
   zone rond andere robots in de fleet-mask (beide stralen + 5 cm, verlengd in
